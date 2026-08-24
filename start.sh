@@ -183,8 +183,8 @@ case "${1:-start}" in
     if has_compose; then docker compose logs --tail=200 -f; elif [[ -f "$PROJECT_DIR/.systemd-scope" ]] && grep -q '^system$' "$PROJECT_DIR/.systemd-scope"; then journalctl -u "$(native_service_name)" -n 200 -f; else journalctl --user-unit "$(native_service_name)" -n 200 -f; fi
     exit 0
     ;;
-  start) ;;
-  *) fail "Usage: ./start.sh [--configure|--stop|--status|--logs]" ;;
+  start|--start) ;;
+  *) fail "Usage: ./start.sh [--start|--configure|--stop|--status|--logs]" ;;
 esac
 
 check_configuration
