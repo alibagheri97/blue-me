@@ -1,0 +1,80 @@
+name: ${COMPOSE_PROJECT_NAME:-blue-me}
+
+services:
+  db:
+    image: mysql:8.4
+    profiles: [managed-db]
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=256M
+    environment:
+      MYSQL_DATABASE: ${DATABASE_NAME}
+      MYSQL_USER: ${DATABASE_USER}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: ${APP_TIMEZONE:-UTC}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks: [blue_me_internal]
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_ENV: production
+      DATABASE_HOST: ${CONTAINER_DATABASE_HOST:-db}
+      DATABASE_PORT: ${DATABASE_PORT:-3306}
+      API_PORT: 8100
+      UPLOAD_DIR: /app/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [blue_me_internal]
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3100}:80"
+    volumes:
+      - ./branding:/usr/share/nginx/brand:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/api/health | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [blue_me_internal]
+
+volumes:
+  mysql_data:
+  uploads:
+
+networks:
+  blue_me_internal:
+    driver: bridge
