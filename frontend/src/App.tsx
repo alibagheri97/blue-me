@@ -9,6 +9,8 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const UsersPage = lazy(() => import("./pages/UsersPage"));
 const InventoryPage = lazy(() => import("./pages/InventoryPage"));
+const PurchasesPage = lazy(() => import("./pages/PurchasesPage"));
+const MenuPage = lazy(() => import("./pages/MenuPage"));
 const PosPage = lazy(() => import("./pages/PosPage"));
 const KitchenPage = lazy(() => import("./pages/KitchenPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
@@ -30,6 +32,8 @@ export default function App() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/users" element={<RoleRoute roles={["root"]}><UsersPage /></RoleRoute>} />
         <Route path="/inventory" element={<RoleRoute roles={["root", "storage_manager"]}><InventoryPage /></RoleRoute>} />
+        <Route path="/purchases" element={<RoleRoute roles={["root", "storage_manager"]}><PurchasesPage /></RoleRoute>} />
+        <Route path="/menu" element={<RoleRoute roles={["root", "accounting_manager", "sales_manager", "kitchen_manager"]}><MenuPage /></RoleRoute>} />
         <Route path="/pos" element={<RoleRoute roles={["root", "accounting_manager", "sales_manager"]}><PosPage /></RoleRoute>} />
         <Route path="/kitchen" element={<RoleRoute roles={["root", "kitchen_manager"]}><KitchenPage /></RoleRoute>} />
         <Route path="/reports" element={<RoleRoute roles={["root"]}><ReportsPage /></RoleRoute>} />

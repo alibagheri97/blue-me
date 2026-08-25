@@ -52,9 +52,21 @@ def validate_ingredients(db: Session, payload: RecipeUpsert) -> None:
     ids = [line.inventory_item_id for line in payload.ingredients]
     if len(ids) != len(set(ids)):
         raise HTTPException(status_code=422, detail="Each ingredient can appear only once")
-    found = set(db.scalars(select(InventoryItem.id).where(InventoryItem.id.in_(ids))))
-    if found != set(ids):
+    items = {
+        item.id: item for item in db.scalars(select(InventoryItem).where(InventoryItem.id.in_(ids)))
+    }
+    if set(items) != set(ids):
         raise HTTPException(status_code=422, detail="One or more inventory ingredients do not exist")
+    mismatches = [
+        f"{items[line.inventory_item_id].name}: expected {items[line.inventory_item_id].unit}"
+        for line in payload.ingredients
+        if line.unit != items[line.inventory_item_id].unit
+    ]
+    if mismatches:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Recipe units must match inventory units", "items": mismatches},
+        )
 
 
 @router.get("/recipes", response_model=list[RecipeRead])
@@ -73,6 +85,11 @@ def create_recipe(
     menu_item = db.get(MenuItem, payload.menu_item_id)
     if menu_item is None:
         raise HTTPException(status_code=404, detail="Menu item not found")
+    if menu_item.inventory_item_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This menu item is linked directly to inventory and cannot also have a recipe",
+        )
     if db.scalar(select(Recipe.id).where(Recipe.menu_item_id == payload.menu_item_id)):
         raise HTTPException(status_code=409, detail="This menu item already has a recipe")
     validate_ingredients(db, payload)
@@ -123,6 +140,11 @@ def update_recipe(
     menu_item = db.get(MenuItem, payload.menu_item_id)
     if menu_item is None:
         raise HTTPException(status_code=404, detail="Menu item not found")
+    if menu_item.inventory_item_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This menu item is linked directly to inventory and cannot also have a recipe",
+        )
     validate_ingredients(db, payload)
     recipe.menu_item_id = payload.menu_item_id
     recipe.yield_quantity = payload.yield_quantity

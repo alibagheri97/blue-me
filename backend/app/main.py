@@ -7,7 +7,18 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.db import engine
-from app.routers import audit_logs, auth, config, inventory, kitchen, orders, reports, users
+from app.routers import (
+    audit_logs,
+    auth,
+    config,
+    inventory,
+    kitchen,
+    notifications,
+    orders,
+    purchases,
+    reports,
+    users,
+)
 
 app = FastAPI(
     title=f"{settings.app_name} API",
@@ -33,10 +44,12 @@ app.include_router(config.router)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(inventory.router)
+app.include_router(purchases.router)
 app.include_router(orders.router)
 app.include_router(kitchen.router)
 app.include_router(reports.router)
 app.include_router(audit_logs.router)
+app.include_router(notifications.router)
 
 
 @app.get("/ready", tags=["configuration"])
@@ -44,4 +57,3 @@ def readiness() -> dict[str, str]:
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
     return {"status": "ready", "database": "connected"}
-

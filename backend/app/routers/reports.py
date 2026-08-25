@@ -13,11 +13,13 @@ from app.models import (
     DailyNeed,
     InventoryItem,
     MenuItem,
+    NeedSource,
+    Notification,
     Order,
     OrderStatus,
     PriceChangeRequest,
-    Recipe,
-    RecipeIngredient,
+    PurchaseReceipt,
+    PurchaseStatus,
     StockMovement,
     User,
     UserRole,
@@ -40,7 +42,9 @@ def successful_orders_query(start: datetime, end: datetime):
 
 
 @router.get("/dashboard", response_model=DashboardSummary)
-def dashboard(_: User = Depends(get_current_user), db: Session = Depends(get_db)) -> DashboardSummary:
+def dashboard(
+    actor: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> DashboardSummary:
     today_start, today_end = day_bounds(date.today())
     yesterday_start, yesterday_end = day_bounds(date.today() - timedelta(days=1))
     today_orders = list(db.scalars(successful_orders_query(today_start, today_end)))
@@ -93,6 +97,20 @@ def dashboard(_: User = Depends(get_current_user), db: Session = Depends(get_db)
             select(func.count()).select_from(DailyNeed).where(DailyNeed.status == ApprovalStatus.PENDING)
         )
         or 0,
+        automatic_purchase_needs=db.scalar(
+            select(func.count()).select_from(DailyNeed).where(
+                DailyNeed.status == ApprovalStatus.PENDING,
+                DailyNeed.source == NeedSource.AUTOMATIC,
+            )
+        )
+        or 0,
+        unread_notifications=db.scalar(
+            select(func.count()).select_from(Notification).where(
+                Notification.recipient_user_id == actor.id,
+                Notification.is_read.is_(False),
+            )
+        )
+        or 0,
         active_users=db.scalar(select(func.count()).select_from(User).where(User.is_active.is_(True))) or 0,
         orders_in_kitchen=db.scalar(
             select(func.count()).select_from(Order).where(
@@ -135,30 +153,16 @@ def reports_overview(
     )
 
     menu_ids = {line.menu_item_id for order in orders for line in order.items}
-    recipes = list(
-        db.scalars(
-            select(Recipe)
-            .options(
-                selectinload(Recipe.ingredients).selectinload(RecipeIngredient.inventory_item)
-            )
-            .where(Recipe.menu_item_id.in_(menu_ids))
-        ).unique()
-    )
-    recipe_costs: dict[int, Decimal] = {}
-    for recipe in recipes:
-        recipe_costs[recipe.menu_item_id] = sum(
-            (line.quantity * line.inventory_item.average_cost for line in recipe.ingredients),
-            Decimal("0"),
-        ) / recipe.yield_quantity
-
     cogs = sum(
-        (
-            recipe_costs.get(line.menu_item_id, Decimal("0")) * line.quantity
-            for order in orders
-            for line in order.items
-        ),
+        (line.line_cost for order in orders for line in order.items),
         Decimal("0"),
     )
+    purchase_spend = db.scalar(
+        select(func.coalesce(func.sum(PurchaseReceipt.total_cost), 0)).where(
+            PurchaseReceipt.purchased_at.between(start_dt, end_dt),
+            PurchaseReceipt.status == PurchaseStatus.POSTED,
+        )
+    ) or Decimal("0")
     daily = {
         (start_date + timedelta(days=index)).isoformat(): {
             "date": (start_date + timedelta(days=index)).isoformat(),
@@ -204,7 +208,7 @@ def reports_overview(
             )
             stat["quantity"] += line.quantity
             stat["revenue"] += allocated_revenue
-            stat["estimated_cost"] += recipe_costs.get(line.menu_item_id, Decimal("0")) * line.quantity
+            stat["estimated_cost"] += line.line_cost
             menu = menu_lookup.get(line.menu_item_id)
             category = menu.category if menu else "Unknown"
             category_stats[category]["revenue"] += allocated_revenue
@@ -243,6 +247,7 @@ def reports_overview(
             "orders": len(orders),
             "average_order_value": revenue / len(orders) if orders else Decimal("0"),
             "estimated_cogs": cogs.quantize(Decimal("0.01")),
+            "purchase_spend": Decimal(purchase_spend).quantize(Decimal("0.01")),
             "gross_profit": (revenue - cogs).quantize(Decimal("0.01")),
             "gross_margin_percent": ((revenue - cogs) / revenue * 100).quantize(Decimal("0.01"))
             if revenue > 0
@@ -269,6 +274,13 @@ def reports_overview(
             "total_value": inventory_value.quantize(Decimal("0.01")),
             "active_items": len(inventory_items),
             "low_stock_items": len(low_stock),
+            "automatic_purchase_needs": db.scalar(
+                select(func.count()).select_from(DailyNeed).where(
+                    DailyNeed.source == NeedSource.AUTOMATIC,
+                    DailyNeed.status == ApprovalStatus.PENDING,
+                )
+            )
+            or 0,
             "slow_moving_value": slow_moving_value.quantize(Decimal("0.01")),
             "slow_moving_percent": (slow_moving_value / inventory_value * 100).quantize(Decimal("0.01"))
             if inventory_value > 0

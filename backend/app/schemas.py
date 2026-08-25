@@ -2,13 +2,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from app.models import (
     ApprovalStatus,
+    NeedSource,
     NeedPriority,
     OrderStatus,
     PaymentMethod,
+    PurchaseStatus,
     UserRole,
 )
 
@@ -105,8 +107,18 @@ class InventoryItemCreate(BaseModel):
     category_id: int | None = None
     unit: str = Field(default="unit", min_length=1, max_length=32)
     reorder_level: Decimal = Field(default=0, ge=0, max_digits=14, decimal_places=3)
+    target_stock_level: Decimal = Field(
+        default=Decimal("0"), ge=0, max_digits=14, decimal_places=3
+    )
+    auto_reorder_enabled: bool = False
     selling_price: PositiveMoney = Decimal("0")
     description: str | None = Field(default=None, max_length=5000)
+
+    @model_validator(mode="after")
+    def valid_auto_reorder_range(self):
+        if self.auto_reorder_enabled and self.target_stock_level <= self.reorder_level:
+            raise ValueError("Target stock must be greater than the reorder level")
+        return self
 
 
 class InventoryItemUpdate(BaseModel):
@@ -115,6 +127,8 @@ class InventoryItemUpdate(BaseModel):
     category_id: int | None = None
     unit: str | None = Field(default=None, min_length=1, max_length=32)
     reorder_level: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=3)
+    target_stock_level: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=3)
+    auto_reorder_enabled: bool | None = None
     description: str | None = Field(default=None, max_length=5000)
     is_active: bool | None = None
 
@@ -127,6 +141,8 @@ class InventoryItemRead(ORMModel):
     unit: str
     current_quantity: Decimal
     reorder_level: Decimal
+    target_stock_level: Decimal
+    auto_reorder_enabled: bool
     average_cost: Decimal
     last_purchase_price: Decimal
     selling_price: Decimal
@@ -177,6 +193,80 @@ class MovementRead(ORMModel):
     created_at: datetime
 
 
+class PurchaseLineCreate(BaseModel):
+    inventory_item_id: int
+    quantity: PositiveQuantity
+    purchase_unit: str = Field(min_length=1, max_length=32)
+    conversion_factor: PositiveQuantity = Decimal("1")
+    line_total: PositiveMoney
+
+
+class PurchaseReceiptCreate(BaseModel):
+    supplier_name: str | None = Field(default=None, max_length=160)
+    invoice_number: str | None = Field(default=None, max_length=100)
+    purchased_at: datetime
+    discount: PositiveMoney = Decimal("0")
+    extra_cost: PositiveMoney = Decimal("0")
+    notes: str | None = Field(default=None, max_length=1000)
+    lines: list[PurchaseLineCreate] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def unique_items(self):
+        ids = [line.inventory_item_id for line in self.lines]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Each inventory item can appear only once per receipt")
+        subtotal = sum((line.line_total for line in self.lines), Decimal("0"))
+        if self.discount > subtotal + self.extra_cost:
+            raise ValueError("Discount cannot exceed the receipt value")
+        return self
+
+
+class PurchaseLineRead(ORMModel):
+    id: int
+    inventory_item_id: int
+    item_name: str
+    quantity: Decimal
+    purchase_unit: str
+    conversion_factor: Decimal
+    stock_quantity: Decimal
+    stock_unit: str
+    line_total: Decimal
+    allocated_cost: Decimal
+    landed_total: Decimal
+    unit_cost: Decimal
+
+
+class PurchaseReceiptRead(ORMModel):
+    id: int
+    receipt_number: str
+    supplier_name: str | None
+    invoice_number: str | None
+    purchased_at: datetime
+    subtotal: Decimal
+    discount: Decimal
+    extra_cost: Decimal
+    total_cost: Decimal
+    status: PurchaseStatus
+    notes: str | None
+    created_by_id: int
+    created_at: datetime
+    voided_at: datetime | None
+    void_reason: str | None
+    created_by: UserBrief
+    lines: list[PurchaseLineRead]
+
+
+class PaginatedPurchases(BaseModel):
+    items: list[PurchaseReceiptRead]
+    total: int
+    page: int
+    page_size: int
+
+
+class PurchaseVoid(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
 class PriceRequestCreate(BaseModel):
     requested_price: PositiveMoney
     reason: str = Field(min_length=3, max_length=500)
@@ -217,10 +307,30 @@ class CustomerRead(ORMModel):
     created_at: datetime
 
 
+class MenuCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+    color: str = Field(default="#2563eb", pattern=r"^#[0-9a-fA-F]{6}$")
+    sort_order: int = Field(default=0, ge=0, le=9999)
+    is_active: bool = True
+
+
+class MenuCategoryRead(ORMModel):
+    id: int
+    name: str
+    description: str | None
+    color: str
+    sort_order: int
+    is_active: bool
+
+
 class MenuItemCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
-    category: str = Field(default="General", min_length=1, max_length=100)
+    category: str = Field(default="عمومی", min_length=1, max_length=100)
+    category_id: int | None = None
     selling_price: PositiveMoney
+    inventory_item_id: int | None = None
+    stock_quantity_per_sale: PositiveQuantity = Decimal("1")
     description: str | None = Field(default=None, max_length=500)
     is_active: bool = True
 
@@ -228,7 +338,10 @@ class MenuItemCreate(BaseModel):
 class MenuItemUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     category: str | None = Field(default=None, min_length=1, max_length=100)
+    category_id: int | None = None
     selling_price: PositiveMoney | None = None
+    inventory_item_id: int | None = None
+    stock_quantity_per_sale: PositiveQuantity | None = None
     description: str | None = Field(default=None, max_length=500)
     is_active: bool | None = None
 
@@ -237,10 +350,19 @@ class MenuItemRead(ORMModel):
     id: int
     name: str
     category: str
+    category_id: int | None
     selling_price: Decimal
+    inventory_item_id: int | None
+    stock_quantity_per_sale: Decimal
     description: str | None
     image_path: str | None
     is_active: bool
+    calculated_cost: Decimal = Decimal("0")
+    gross_profit: Decimal = Decimal("0")
+    margin_percent: Decimal = Decimal("0")
+    recipe_configured: bool = False
+    is_available: bool = True
+    max_available_quantity: int | None = None
 
 
 class RecipeIngredientWrite(BaseModel):
@@ -301,6 +423,8 @@ class OrderItemRead(ORMModel):
     quantity: int
     unit_price: Decimal
     line_total: Decimal
+    unit_cost: Decimal
+    line_cost: Decimal
     notes: str | None
 
 
@@ -342,12 +466,25 @@ class DailyNeedRead(ORMModel):
     quantity: Decimal
     unit: str
     priority: NeedPriority
+    source: NeedSource
     status: ApprovalStatus
     notes: str | None
     requested_by_id: int
     decision_note: str | None
     created_at: datetime
     requested_by: UserBrief
+
+
+class NotificationRead(ORMModel):
+    id: int
+    kind: str
+    title: str
+    message: str
+    entity_type: str | None
+    entity_id: str | None
+    is_read: bool
+    created_at: datetime
+    read_at: datetime | None
 
 
 class DashboardSummary(BaseModel):
@@ -357,6 +494,8 @@ class DashboardSummary(BaseModel):
     low_stock_count: int
     pending_price_approvals: int
     pending_daily_needs: int
+    automatic_purchase_needs: int
+    unread_notifications: int
     active_users: int
     orders_in_kitchen: int
     sales_change_percent: Decimal

@@ -9,7 +9,7 @@ interface AuditEntry { id: number; actor_id: number | null; actor_username: stri
 interface AuditPageData { items: AuditEntry[]; total: number; page: number; page_size: number }
 interface Facets { categories: string[]; actions: string[]; users: Array<{id:number;username:string;full_name:string}> }
 
-const tone: Record<string,string> = { security: "warning", approvals: "info", inventory: "success", orders: "info", users: "violet", kitchen: "warning", daily_needs: "warning", system: "neutral", menu: "violet", customers: "success" };
+const tone: Record<string,string> = { security: "warning", approvals: "info", inventory: "success", purchases: "success", orders: "info", users: "violet", kitchen: "warning", daily_needs: "warning", system: "neutral", menu: "violet", customers: "success" };
 
 export default function AuditPage() {
   const [search, setSearch] = useState("");
@@ -30,15 +30,15 @@ export default function AuditPage() {
 }
 
 function categoryLabel(value: string): string {
-  return ({ security: "امنیت", approvals: "تأییدها", inventory: "انبار", orders: "سفارش‌ها", users: "کاربران", kitchen: "آشپزخانه", daily_needs: "نیازهای روزانه", system: "سامانه", menu: "منو", customers: "مشتریان" } as Record<string,string>)[value] || value;
+  return ({ security: "امنیت", approvals: "تأییدها", inventory: "انبار", purchases: "ورودی کالا", orders: "سفارش‌ها", users: "کاربران", kitchen: "آشپزخانه", daily_needs: "نیازهای خرید", system: "سامانه", menu: "منو", customers: "مشتریان" } as Record<string,string>)[value] || value;
 }
 
 function actionLabel(value: string): string {
-  return ({ create: "ایجاد", update: "ویرایش", delete: "حذف", archive: "بایگانی", receive: "ورود کالا", adjust: "اصلاح موجودی", waste: "ضایعات", login: "ورود", login_failed: "ورود ناموفق", bootstrap: "راه‌اندازی اولیه", status_change: "تغییر وضعیت", image_update: "تغییر تصویر", price_change_requested: "درخواست تغییر قیمت", price_changed: "تغییر قیمت", price_change_approved: "تأیید قیمت", price_change_rejected: "رد قیمت", daily_need_approved: "تأیید نیاز خرید", daily_need_rejected: "رد نیاز خرید" } as Record<string,string>)[value] || value.replaceAll("_"," ");
+  return ({ create: "ایجاد", update: "ویرایش", delete: "حذف", archive: "بایگانی", void: "ابطال", receive: "ورود کالا", adjust: "اصلاح موجودی", waste: "ضایعات", login: "ورود", login_failed: "ورود ناموفق", bootstrap: "راه‌اندازی اولیه", seed_catalog: "ساخت کاتالوگ اولیه", auto_create: "پیشنهاد خودکار خرید", auto_need_fulfilled: "تأمین خودکار", auto_need_cancelled: "لغو هشدار خودکار", status_change: "تغییر وضعیت", image_update: "تغییر تصویر", price_change_requested: "درخواست تغییر قیمت", price_changed: "تغییر قیمت", price_change_approved: "تأیید قیمت", price_change_rejected: "رد قیمت", daily_need_approved: "تأیید نیاز خرید", daily_need_rejected: "رد نیاز خرید" } as Record<string,string>)[value] || value.replaceAll("_"," ");
 }
 
 function entityLabel(value: string): string {
-  return ({ user: "کاربر", session: "نشست", category: "دسته‌بندی", inventory_item: "کالای انبار", stock_movement: "گردش موجودی", price_change_request: "درخواست قیمت", customer: "مشتری", menu_item: "محصول منو", order: "سفارش", recipe: "دستور پخت", daily_need: "نیاز روزانه" } as Record<string,string>)[value] || value;
+  return ({ user: "کاربر", session: "نشست", category: "دسته‌بندی", inventory_item: "کالای انبار", stock_movement: "گردش موجودی", purchase_receipt: "فاکتور ورودی", price_change_request: "درخواست قیمت", customer: "مشتری", menu_category: "دسته‌بندی منو", menu_item: "محصول منو", order: "سفارش", recipe: "دستور پخت", daily_need: "نیاز خرید", catalog: "کاتالوگ" } as Record<string,string>)[value] || value;
 }
 
 function translateSummary(summary: string): string {
@@ -52,6 +52,10 @@ function translateSummary(summary: string): string {
     .replace(/^Created inventory item (.+)$/, "کالای $1 در انبار ایجاد شد")
     .replace(/^Updated inventory item (.+)$/, "کالای $1 ویرایش شد")
     .replace(/^Created inventory category (.+)$/, "دسته‌بندی $1 ایجاد شد")
+    .replace(/^Posted purchase receipt (.+) with (\d+) items$/, "فاکتور ورودی $1 با $2 ردیف ثبت شد")
+    .replace(/^Voided purchase receipt (.+)$/, "فاکتور ورودی $1 باطل شد")
+    .replace(/^Created automatic purchase need for (.+)$/, "پیشنهاد خودکار خرید برای $1 ساخته شد")
+    .replace(/^Automatic purchase need closed for (.+)$/, "هشدار خودکار خرید $1 بسته شد")
     .replace(/^Created recipe for (.+)$/, "دستور پخت $1 ایجاد شد")
     .replace(/^Updated recipe for (.+)$/, "دستور پخت $1 ویرایش شد")
     .replace(/^Registered customer (.+)$/, "مشتری $1 ثبت شد");

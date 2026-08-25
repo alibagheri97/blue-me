@@ -3,7 +3,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.audit import record_audit
@@ -12,6 +12,7 @@ from app.deps import client_ip, require_roles
 from app.models import (
     Customer,
     InventoryItem,
+    MenuCategory,
     MenuItem,
     MovementType,
     Order,
@@ -26,6 +27,8 @@ from app.models import (
 from app.schemas import (
     CustomerCreate,
     CustomerRead,
+    MenuCategoryCreate,
+    MenuCategoryRead,
     MenuItemCreate,
     MenuItemRead,
     MenuItemUpdate,
@@ -33,13 +36,101 @@ from app.schemas import (
     OrderRead,
     OrderStatusUpdate,
 )
+from app.services.inventory_alerts import sync_auto_purchase_need
 
 router = APIRouter(tags=["orders"])
 sales_roles = require_roles(UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.SALES_MANAGER)
 order_view_roles = require_roles(
     UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.SALES_MANAGER, UserRole.KITCHEN_MANAGER
 )
-root_only = require_roles(UserRole.ROOT)
+
+
+def menu_query():
+    return select(MenuItem).options(
+        selectinload(MenuItem.menu_category),
+        selectinload(MenuItem.inventory_item),
+        selectinload(MenuItem.recipe)
+        .selectinload(Recipe.ingredients)
+        .selectinload(RecipeIngredient.inventory_item),
+    )
+
+
+def serialize_menu_item(item: MenuItem) -> dict:
+    cost = Decimal("0")
+    max_available: int | None = None
+    configured = False
+    if item.inventory_item is not None:
+        configured = True
+        per_sale = Decimal(item.stock_quantity_per_sale)
+        cost = Decimal(item.inventory_item.average_cost) * per_sale
+        max_available = int(Decimal(item.inventory_item.current_quantity) / per_sale)
+    elif item.recipe is not None and item.recipe.ingredients:
+        configured = True
+        yield_quantity = Decimal(item.recipe.yield_quantity)
+        cost = sum(
+            (
+                Decimal(line.quantity) * Decimal(line.inventory_item.average_cost)
+                for line in item.recipe.ingredients
+            ),
+            Decimal("0"),
+        ) / yield_quantity
+        max_available = min(
+            int(
+                Decimal(line.inventory_item.current_quantity)
+                / (Decimal(line.quantity) / yield_quantity)
+            )
+            for line in item.recipe.ingredients
+        )
+    gross_profit = Decimal(item.selling_price) - cost
+    margin = (
+        gross_profit / Decimal(item.selling_price) * 100
+        if Decimal(item.selling_price) > 0
+        else Decimal("0")
+    )
+    return {
+        "id": item.id,
+        "name": item.name,
+        "category": item.menu_category.name if item.menu_category else item.category,
+        "category_id": item.category_id,
+        "selling_price": item.selling_price,
+        "inventory_item_id": item.inventory_item_id,
+        "stock_quantity_per_sale": item.stock_quantity_per_sale,
+        "description": item.description,
+        "image_path": item.image_path,
+        "is_active": item.is_active,
+        "calculated_cost": cost.quantize(Decimal("0.01")),
+        "gross_profit": gross_profit.quantize(Decimal("0.01")),
+        "margin_percent": margin.quantize(Decimal("0.01")),
+        "recipe_configured": configured,
+        "is_available": configured and (max_available or 0) > 0,
+        "max_available_quantity": max_available,
+    }
+
+
+def resolve_menu_category(
+    db: Session, *, category_id: int | None, category_name: str | None
+) -> MenuCategory:
+    category = db.get(MenuCategory, category_id) if category_id is not None else None
+    if category_id is not None and category is None:
+        raise HTTPException(status_code=422, detail="Menu category not found")
+    if category is None:
+        name = (category_name or "عمومی").strip()
+        category = db.scalar(
+            select(MenuCategory).where(func.lower(MenuCategory.name) == name.lower())
+        )
+        if category is None:
+            category = MenuCategory(name=name)
+            db.add(category)
+            db.flush()
+    return category
+
+
+def validate_direct_inventory(db: Session, inventory_item_id: int | None) -> None:
+    if inventory_item_id is None:
+        return
+    item = db.get(InventoryItem, inventory_item_id)
+    if item is None or not item.is_active:
+        raise HTTPException(status_code=422, detail="Inventory item for direct sale is unavailable")
 
 
 def order_query():
@@ -98,30 +189,149 @@ def create_customer(
     return customer
 
 
+@router.get("/menu-categories", response_model=list[MenuCategoryRead])
+def list_menu_categories(
+    active: bool | None = True,
+    _: User = Depends(order_view_roles),
+    db: Session = Depends(get_db),
+) -> list[MenuCategory]:
+    query = select(MenuCategory)
+    if active is not None:
+        query = query.where(MenuCategory.is_active == active)
+    return list(db.scalars(query.order_by(MenuCategory.sort_order, MenuCategory.name)))
+
+
+@router.post("/menu-categories", response_model=MenuCategoryRead, status_code=201)
+def create_menu_category(
+    payload: MenuCategoryCreate,
+    request: Request,
+    actor: User = Depends(sales_roles),
+    db: Session = Depends(get_db),
+) -> MenuCategory:
+    if db.scalar(
+        select(MenuCategory.id).where(func.lower(MenuCategory.name) == payload.name.lower())
+    ):
+        raise HTTPException(status_code=409, detail="Menu category already exists")
+    category = MenuCategory(**payload.model_dump())
+    db.add(category)
+    db.flush()
+    record_audit(
+        db,
+        actor=actor,
+        action="create",
+        category="menu",
+        entity_type="menu_category",
+        entity_id=category.id,
+        summary=f"Created menu category {category.name}",
+        ip_address=client_ip(request),
+    )
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@router.patch("/menu-categories/{category_id}", response_model=MenuCategoryRead)
+def update_menu_category(
+    category_id: int,
+    payload: MenuCategoryCreate,
+    request: Request,
+    actor: User = Depends(sales_roles),
+    db: Session = Depends(get_db),
+) -> MenuCategory:
+    category = db.get(MenuCategory, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Menu category not found")
+    duplicate = db.scalar(
+        select(MenuCategory.id).where(
+            func.lower(MenuCategory.name) == payload.name.lower(), MenuCategory.id != category_id
+        )
+    )
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Menu category name already exists")
+    for key, value in payload.model_dump().items():
+        setattr(category, key, value)
+    for menu_item in db.scalars(select(MenuItem).where(MenuItem.category_id == category.id)):
+        menu_item.category = category.name
+    record_audit(
+        db,
+        actor=actor,
+        action="update",
+        category="menu",
+        entity_type="menu_category",
+        entity_id=category.id,
+        summary=f"Updated menu category {category.name}",
+        ip_address=client_ip(request),
+    )
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@router.delete("/menu-categories/{category_id}", status_code=204)
+def delete_menu_category(
+    category_id: int,
+    request: Request,
+    actor: User = Depends(sales_roles),
+    db: Session = Depends(get_db),
+) -> None:
+    category = db.get(MenuCategory, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Menu category not found")
+    if db.scalar(
+        select(func.count()).select_from(MenuItem).where(MenuItem.category_id == category.id)
+    ):
+        raise HTTPException(status_code=409, detail="Move menu items before deleting this category")
+    record_audit(
+        db,
+        actor=actor,
+        action="delete",
+        category="menu",
+        entity_type="menu_category",
+        entity_id=category.id,
+        summary=f"Deleted menu category {category.name}",
+        ip_address=client_ip(request),
+    )
+    db.delete(category)
+    db.commit()
+
+
 @router.get("/menu-items", response_model=list[MenuItemRead])
 def list_menu_items(
     active: bool | None = True,
+    include_inactive: bool = False,
     search: str | None = Query(default=None, max_length=100),
     _: User = Depends(order_view_roles),
     db: Session = Depends(get_db),
-) -> list[MenuItem]:
-    query = select(MenuItem)
-    if active is not None:
+) -> list[dict]:
+    query = menu_query()
+    if active is not None and not include_inactive:
         query = query.where(MenuItem.is_active == active)
     if search:
         term = f"%{search.strip()}%"
         query = query.where(or_(MenuItem.name.ilike(term), MenuItem.category.ilike(term)))
-    return list(db.scalars(query.order_by(MenuItem.category, MenuItem.name)))
+    return [
+        serialize_menu_item(item)
+        for item in db.scalars(query.order_by(MenuItem.category, MenuItem.name)).unique()
+    ]
 
 
 @router.post("/menu-items", response_model=MenuItemRead, status_code=201)
 def create_menu_item(
     payload: MenuItemCreate,
     request: Request,
-    actor: User = Depends(root_only),
+    actor: User = Depends(sales_roles),
     db: Session = Depends(get_db),
-) -> MenuItem:
-    menu_item = MenuItem(**payload.model_dump())
+) -> dict:
+    validate_direct_inventory(db, payload.inventory_item_id)
+    category = resolve_menu_category(
+        db, category_id=payload.category_id, category_name=payload.category
+    )
+    values = payload.model_dump(exclude={"category_id", "category"})
+    menu_item = MenuItem(
+        **values,
+        category_id=category.id,
+        category=category.name,
+    )
     db.add(menu_item)
     db.flush()
     record_audit(
@@ -136,8 +346,8 @@ def create_menu_item(
         ip_address=client_ip(request),
     )
     db.commit()
-    db.refresh(menu_item)
-    return menu_item
+    menu_item = db.scalar(menu_query().where(MenuItem.id == menu_item.id))
+    return serialize_menu_item(menu_item)
 
 
 @router.patch("/menu-items/{menu_item_id}", response_model=MenuItemRead)
@@ -145,13 +355,28 @@ def update_menu_item(
     menu_item_id: int,
     payload: MenuItemUpdate,
     request: Request,
-    actor: User = Depends(root_only),
+    actor: User = Depends(sales_roles),
     db: Session = Depends(get_db),
-) -> MenuItem:
-    item = db.get(MenuItem, menu_item_id)
+) -> dict:
+    item = db.scalar(menu_query().where(MenuItem.id == menu_item_id))
     if item is None:
         raise HTTPException(status_code=404, detail="Menu item not found")
     changes = payload.model_dump(exclude_unset=True)
+    if "inventory_item_id" in changes:
+        validate_direct_inventory(db, changes["inventory_item_id"])
+        if changes["inventory_item_id"] is not None and item.recipe is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Remove the recipe before linking a direct inventory item",
+            )
+    if "category_id" in changes or "category" in changes:
+        category = resolve_menu_category(
+            db,
+            category_id=changes.pop("category_id", item.category_id),
+            category_name=changes.pop("category", item.category),
+        )
+        changes["category_id"] = category.id
+        changes["category"] = category.name
     for key, value in changes.items():
         setattr(item, key, value)
     record_audit(
@@ -166,8 +391,8 @@ def update_menu_item(
         ip_address=client_ip(request),
     )
     db.commit()
-    db.refresh(item)
-    return item
+    item = db.scalar(menu_query().where(MenuItem.id == item.id))
+    return serialize_menu_item(item)
 
 
 @router.post("/orders", response_model=OrderRead, status_code=201)
@@ -181,14 +406,9 @@ def create_order(
     menu_items = {
         item.id: item
         for item in db.scalars(
-            select(MenuItem)
-            .options(
-                selectinload(MenuItem.recipe)
-                .selectinload(Recipe.ingredients)
-                .selectinload(RecipeIngredient.inventory_item)
-            )
+            menu_query()
             .where(MenuItem.id.in_(menu_ids), MenuItem.is_active.is_(True))
-        )
+        ).unique()
     }
     if len(menu_items) != len(menu_ids):
         raise HTTPException(status_code=400, detail="One or more menu items are unavailable")
@@ -213,15 +433,42 @@ def create_order(
         raise HTTPException(status_code=422, detail="Discount cannot be greater than subtotal")
 
     required_stock: dict[int, Decimal] = {}
+    unit_costs: dict[int, Decimal] = {}
+    unconfigured: list[str] = []
     for line in payload.items:
         menu_item = menu_items[line.menu_item_id]
-        if menu_item.recipe is None:
-            continue
-        for ingredient in menu_item.recipe.ingredients:
-            amount = (ingredient.quantity / menu_item.recipe.yield_quantity) * line.quantity
-            required_stock[ingredient.inventory_item_id] = (
-                required_stock.get(ingredient.inventory_item_id, Decimal("0")) + amount
+        if menu_item.inventory_item is not None:
+            amount_per_sale = Decimal(menu_item.stock_quantity_per_sale)
+            amount = amount_per_sale * line.quantity
+            required_stock[menu_item.inventory_item_id] = (
+                required_stock.get(menu_item.inventory_item_id, Decimal("0")) + amount
             )
+            unit_costs[menu_item.id] = (
+                Decimal(menu_item.inventory_item.average_cost) * amount_per_sale
+            )
+        elif menu_item.recipe is not None and menu_item.recipe.ingredients:
+            recipe_cost = Decimal("0")
+            for ingredient in menu_item.recipe.ingredients:
+                amount_per_sale = Decimal(ingredient.quantity) / Decimal(
+                    menu_item.recipe.yield_quantity
+                )
+                amount = amount_per_sale * line.quantity
+                required_stock[ingredient.inventory_item_id] = (
+                    required_stock.get(ingredient.inventory_item_id, Decimal("0")) + amount
+                )
+                recipe_cost += amount_per_sale * Decimal(ingredient.inventory_item.average_cost)
+            unit_costs[menu_item.id] = recipe_cost
+        else:
+            unconfigured.append(menu_item.name)
+
+    if unconfigured:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Menu items need a recipe or direct inventory link",
+                "items": unconfigured,
+            },
+        )
 
     locked_items = {
         item.id: item
@@ -232,11 +479,15 @@ def create_order(
             .with_for_update()
         )
     }
-    shortages = [
-        f"{locked_items[item_id].name}: need {needed}, have {locked_items[item_id].current_quantity}"
-        for item_id, needed in required_stock.items()
-        if item_id not in locked_items or locked_items[item_id].current_quantity < needed
-    ]
+    shortages = []
+    for item_id, needed in required_stock.items():
+        stock_item = locked_items.get(item_id)
+        if stock_item is None:
+            shortages.append(f"کالای انبار #{item_id}: در دسترس نیست")
+        elif Decimal(stock_item.current_quantity) < needed:
+            shortages.append(
+                f"{stock_item.name}: نیاز {needed}، موجودی {stock_item.current_quantity}"
+            )
     if shortages:
         raise HTTPException(status_code=409, detail={"message": "Insufficient ingredients", "items": shortages})
 
@@ -255,6 +506,7 @@ def create_order(
     db.flush()
     for line in payload.items:
         menu_item = menu_items[line.menu_item_id]
+        unit_cost = unit_costs[menu_item.id]
         db.add(
             OrderItem(
                 order_id=order.id,
@@ -263,6 +515,8 @@ def create_order(
                 quantity=line.quantity,
                 unit_price=menu_item.selling_price,
                 line_total=menu_item.selling_price * line.quantity,
+                unit_cost=unit_cost,
+                line_cost=unit_cost * line.quantity,
                 notes=line.notes,
             )
         )
@@ -275,6 +529,7 @@ def create_order(
                 item_id=item_id,
                 movement_type=MovementType.SALE,
                 quantity=-amount,
+                unit_cost=stock_item.average_cost,
                 quantity_before=before,
                 quantity_after=stock_item.current_quantity,
                 reason=f"Ingredients used by order {order.order_number}",
@@ -283,6 +538,10 @@ def create_order(
                 created_by_id=actor.id,
             )
         )
+        sync_auto_purchase_need(db, item=stock_item, actor=actor)
+    total_cogs = sum(
+        (unit_costs[line.menu_item_id] * line.quantity for line in payload.items), Decimal("0")
+    )
     record_audit(
         db,
         actor=actor,
@@ -291,7 +550,13 @@ def create_order(
         entity_type="order",
         entity_id=order.id,
         summary=f"Placed order {order.order_number} for {order.customer_name}",
-        details={"total": str(order.total), "items": len(payload.items), "payment": order.payment_method.value},
+        details={
+            "total": str(order.total),
+            "cost": str(total_cogs),
+            "gross_profit": str(order.total - total_cogs),
+            "items": len(payload.items),
+            "payment": order.payment_method.value,
+        },
         ip_address=client_ip(request),
     )
     db.commit()
@@ -384,6 +649,7 @@ def update_order_status(
                     item_id=stock.id,
                     movement_type=MovementType.ADJUST,
                     quantity=restored,
+                    unit_cost=movement.unit_cost,
                     quantity_before=before,
                     quantity_after=stock.current_quantity,
                     reason=f"Stock restored after cancelling order {order.order_number}",
@@ -392,6 +658,7 @@ def update_order_status(
                     created_by_id=actor.id,
                 )
             )
+            sync_auto_purchase_need(db, item=stock, actor=actor)
     order.status = payload.status
     record_audit(
         db,

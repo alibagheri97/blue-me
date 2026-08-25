@@ -47,6 +47,8 @@ class ApprovalStatus(str, enum.Enum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    FULFILLED = "fulfilled"
+    CANCELLED = "cancelled"
 
 
 class OrderStatus(str, enum.Enum):
@@ -69,6 +71,16 @@ class NeedPriority(str, enum.Enum):
     NORMAL = "normal"
     HIGH = "high"
     URGENT = "urgent"
+
+
+class NeedSource(str, enum.Enum):
+    MANUAL = "manual"
+    AUTOMATIC = "automatic"
+
+
+class PurchaseStatus(str, enum.Enum):
+    POSTED = "posted"
+    VOIDED = "voided"
 
 
 class TimestampMixin:
@@ -112,6 +124,10 @@ class InventoryItem(TimestampMixin, Base):
     unit: Mapped[str] = mapped_column(String(32), default="unit")
     current_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=0)
     reorder_level: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=0)
+    target_stock_level: Mapped[Decimal] = mapped_column(
+        Numeric(14, 3), default=Decimal("0")
+    )
+    auto_reorder_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     average_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     last_purchase_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     selling_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
@@ -120,6 +136,62 @@ class InventoryItem(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     category: Mapped[Category | None] = relationship(back_populates="items")
     movements: Mapped[list[StockMovement]] = relationship(back_populates="item")
+
+
+class PurchaseReceipt(Base):
+    __tablename__ = "purchase_receipts"
+    __table_args__ = (
+        Index("ix_purchase_receipt_date_status", "purchased_at", "status"),
+        Index("ix_purchase_receipt_supplier", "supplier_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    receipt_number: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    supplier_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    invoice_number: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    purchased_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(16, 2))
+    discount: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    extra_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2))
+    status: Mapped[PurchaseStatus] = mapped_column(
+        Enum(PurchaseStatus, native_enum=False, length=20),
+        default=PurchaseStatus.POSTED,
+        index=True,
+    )
+    notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    voided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    void_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    lines: Mapped[list[PurchaseLine]] = relationship(
+        back_populates="receipt", cascade="all, delete-orphan"
+    )
+
+
+class PurchaseLine(Base):
+    __tablename__ = "purchase_lines"
+    __table_args__ = (Index("ix_purchase_line_item_receipt", "inventory_item_id", "receipt_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    receipt_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_receipts.id", ondelete="CASCADE"), index=True
+    )
+    inventory_item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id"), index=True)
+    item_name: Mapped[str] = mapped_column(String(160))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
+    purchase_unit: Mapped[str] = mapped_column(String(32))
+    conversion_factor: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=1)
+    stock_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
+    stock_unit: Mapped[str] = mapped_column(String(32))
+    line_total: Mapped[Decimal] = mapped_column(Numeric(16, 2))
+    allocated_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    landed_total: Mapped[Decimal] = mapped_column(Numeric(16, 2))
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(16, 4))
+    receipt: Mapped[PurchaseReceipt] = relationship(back_populates="lines")
+    inventory_item: Mapped[InventoryItem] = relationship()
 
 
 class StockMovement(Base):
@@ -150,7 +222,9 @@ class PriceChangeRequest(Base):
     requested_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     reason: Mapped[str] = mapped_column(String(500))
     status: Mapped[ApprovalStatus] = mapped_column(
-        Enum(ApprovalStatus, native_enum=False), default=ApprovalStatus.PENDING, index=True
+        Enum(ApprovalStatus, native_enum=False, length=20),
+        default=ApprovalStatus.PENDING,
+        index=True,
     )
     requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -170,16 +244,37 @@ class Customer(TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
+class MenuCategory(TimestampMixin, Base):
+    __tablename__ = "menu_categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    color: Mapped[str] = mapped_column(String(7), default="#2563eb")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    items: Mapped[list[MenuItem]] = relationship(back_populates="menu_category")
+
+
 class MenuItem(TimestampMixin, Base):
     __tablename__ = "menu_items"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(160), index=True)
     category: Mapped[str] = mapped_column(String(100), default="General", index=True)
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("menu_categories.id"), nullable=True, index=True
+    )
     selling_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    inventory_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_items.id"), nullable=True, index=True
+    )
+    stock_quantity_per_sale: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=1)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    menu_category: Mapped[MenuCategory | None] = relationship(back_populates="items")
+    inventory_item: Mapped[InventoryItem | None] = relationship()
     recipe: Mapped[Recipe | None] = relationship(back_populates="menu_item", uselist=False)
 
 
@@ -244,6 +339,8 @@ class OrderItem(Base):
     quantity: Mapped[int] = mapped_column(Integer)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     line_total: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(16, 4), default=0)
+    line_cost: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
     notes: Mapped[str | None] = mapped_column(String(300), nullable=True)
     order: Mapped[Order] = relationship(back_populates="items")
     menu_item: Mapped[MenuItem] = relationship()
@@ -260,10 +357,19 @@ class DailyNeed(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
     unit: Mapped[str] = mapped_column(String(32))
     priority: Mapped[NeedPriority] = mapped_column(Enum(NeedPriority, native_enum=False))
+    source: Mapped[NeedSource] = mapped_column(
+        Enum(NeedSource, native_enum=False, length=20),
+        default=NeedSource.MANUAL,
+        index=True,
+    )
     status: Mapped[ApprovalStatus] = mapped_column(
-        Enum(ApprovalStatus, native_enum=False), default=ApprovalStatus.PENDING, index=True
+        Enum(ApprovalStatus, native_enum=False, length=20),
+        default=ApprovalStatus.PENDING,
+        index=True,
     )
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    quantity_at_creation: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
+    reorder_level_at_creation: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
     requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     decision_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -271,6 +377,25 @@ class DailyNeed(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     inventory_item: Mapped[InventoryItem | None] = relationship()
     requested_by: Mapped[User] = relationship(foreign_keys=[requested_by_id])
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notification_recipient_unread", "recipient_user_id", "is_read", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipient_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(50), index=True)
+    title: Mapped[str] = mapped_column(String(180))
+    message: Mapped[str] = mapped_column(String(500))
+    entity_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    entity_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    recipient: Mapped[User] = relationship()
 
 
 class AuditLog(Base):

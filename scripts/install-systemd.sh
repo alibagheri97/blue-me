@@ -7,6 +7,19 @@ ENV_FILE="$PROJECT_DIR/.env"
 
 database_mode="$(sed -n 's/^DATABASE_MODE=//p' "$ENV_FILE" | tail -n 1)"
 [[ "$database_mode" == "external" ]] || { echo "Blue Me: native systemd mode requires DATABASE_MODE=external" >&2; exit 1; }
+database_host="$(sed -n 's/^DATABASE_HOST=//p' "$ENV_FILE" | tail -n 1)"
+if [[ "$database_host" == "localhost" || "$database_host" == "127.0.0.1" ]]; then
+  database_unit=""
+  for candidate in mariadb.service mysql.service mysqld.service; do
+    if [[ "$(systemctl show "$candidate" -p LoadState --value 2>/dev/null || true)" != "not-found" ]]; then
+      database_unit="$candidate"
+      break
+    fi
+  done
+  [[ -n "$database_unit" ]] || { echo "Blue Me: no local MySQL/MariaDB systemd service was found" >&2; exit 1; }
+  echo "Enabling and starting local database service ($database_unit)…"
+  systemctl enable --now "$database_unit"
+fi
 command -v python3 >/dev/null 2>&1 || { echo "Blue Me: python3 is required" >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "Blue Me: Node.js and npm are required" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || { echo "Blue Me: curl is required" >&2; exit 1; }

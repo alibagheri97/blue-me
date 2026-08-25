@@ -8,12 +8,12 @@ import { money, quantity } from "../lib/format";
 
 interface ReportData {
   period: { days: number; start: string; end: string };
-  kpis: { revenue: string; revenue_growth_percent: string; orders: number; average_order_value: string; estimated_cogs: string; gross_profit: string; gross_margin_percent: string; known_customer_rate_percent: string; repeat_customers: number };
+  kpis: { revenue: string; revenue_growth_percent: string; orders: number; average_order_value: string; estimated_cogs: string; purchase_spend: string; gross_profit: string; gross_margin_percent: string; known_customer_rate_percent: string; repeat_customers: number };
   daily_sales: Array<{ date: string; revenue: string; orders: number }>;
   hourly_demand: Array<{ hour: number; revenue: string; orders: number }>;
   product_performance: Array<{ id: number; name: string; quantity: number; revenue: string; estimated_cost: string; gross_profit: string; margin_percent: string }>;
   category_performance: Array<{ category: string; revenue: string; quantity: number }>;
-  inventory_health: { total_value: string; active_items: number; low_stock_items: number; slow_moving_value: string; slow_moving_percent: string };
+  inventory_health: { total_value: string; active_items: number; low_stock_items: number; automatic_purchase_needs: number; slow_moving_value: string; slow_moving_percent: string };
   insights: Array<{ tone: string; title: string; message: string }>;
 }
 
@@ -34,8 +34,8 @@ export default function ReportsPage() {
       <section className="metric-grid report-metrics">
         <article className="metric-card metric-primary"><span className="metric-icon"><CircleDollarSign /></span><div><small>درآمد کل</small><strong>{money(data.kpis.revenue)}</strong><span className={growth >= 0 ? "trend-positive" : "trend-negative"}>{growth >= 0 ? <ArrowUpRight size={15}/> : <ArrowDownRight size={15}/>} {quantity(Math.abs(growth))}٪ نسبت به دوره قبل</span></div></article>
         <article className="metric-card"><span className="metric-icon mint"><ReceiptText /></span><div><small>تعداد سفارش</small><strong>{quantity(data.kpis.orders)}</strong><span>میانگین سفارش {money(data.kpis.average_order_value)}</span></div></article>
-        <article className="metric-card"><span className="metric-icon violet"><Target /></span><div><small>سود ناخالص برآوردی</small><strong>{money(data.kpis.gross_profit)}</strong><span>حاشیه سود {quantity(data.kpis.gross_margin_percent)}٪</span></div></article>
-        <article className="metric-card"><span className="metric-icon amber"><Boxes /></span><div><small>ارزش موجودی</small><strong>{money(data.inventory_health.total_value)}</strong><span>{quantity(data.inventory_health.low_stock_items)} کالا نیازمند توجه</span></div></article>
+        <article className="metric-card"><span className="metric-icon violet"><Target /></span><div><small>سود ناخالص واقعی</small><strong>{money(data.kpis.gross_profit)}</strong><span>حاشیه {quantity(data.kpis.gross_margin_percent)}٪ · بهای ثبت‌شده هنگام فروش</span></div></article>
+        <article className="metric-card"><span className="metric-icon amber"><Boxes /></span><div><small>ارزش موجودی</small><strong>{money(data.inventory_health.total_value)}</strong><span>خرید دوره {money(data.kpis.purchase_spend)}</span></div></article>
       </section>
       <section className="analytics-grid">
         <article className="panel chart-panel sales-chart"><header className="panel-header"><div><h2>روند فروش</h2><p>درآمد و تعداد سفارش روزانه</p></div><BarChart3 size={20}/></header><ResponsiveContainer width="100%" height={300}><AreaChart data={data.daily_sales}><defs><linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2563eb" stopOpacity={.32}/><stop offset="95%" stopColor="#2563eb" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e8edf4"/><XAxis dataKey="date" tickFormatter={(v) => new Date(`${v}T00:00`).toLocaleDateString("fa-IR",{month:"short",day:"numeric"})} tick={{fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:11}} axisLine={false} tickLine={false}/><Tooltip formatter={(value) => money(Number(value))}/><Area name="درآمد" type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2.5} fill="url(#salesFill)"/></AreaChart></ResponsiveContainer></article>

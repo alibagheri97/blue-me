@@ -26,7 +26,7 @@ export default function PosPage() {
   const [receipt, setReceipt] = useState<{ order: Order; mode: "customer" | "kitchen" } | null>(null);
   const [menuModal, setMenuModal] = useState<MenuItem | "new" | null>(null);
   const [error, setError] = useState("");
-  const menu = useQuery({ queryKey: ["menu"], queryFn: () => api<MenuItem[]>("/menu-items") });
+  const menu = useQuery({ queryKey: ["menu"], queryFn: () => api<MenuItem[]>("/menu-items?active=true") });
   const customers = useQuery({ queryKey: ["customers", customerSearch], queryFn: () => api<Customer[]>(`/customers?search=${encodeURIComponent(customerSearch)}`), enabled: customerMode === "existing" });
   const orders = useQuery({ queryKey: ["orders-today"], queryFn: () => api<Order[]>(`/orders?day=${new Date().toISOString().slice(0, 10)}&limit=100`), refetchInterval: 20_000 });
   const mutation = useMutation({
@@ -48,7 +48,7 @@ export default function PosPage() {
   const subtotal = lines.reduce((sum, line) => sum + Number(line.item.selling_price) * line.quantity, 0);
   const total = Math.max(0, subtotal - Number(discount || 0));
 
-  const add = (item: MenuItem) => setCart((current) => ({ ...current, [item.id]: { item, quantity: (current[item.id]?.quantity || 0) + 1, notes: current[item.id]?.notes || "" } }));
+  const add = (item: MenuItem) => { if (!item.is_available) return; setCart((current) => ({ ...current, [item.id]: { item, quantity: (current[item.id]?.quantity || 0) + 1, notes: current[item.id]?.notes || "" } })); };
   const changeQty = (id: number, delta: number) => setCart((current) => { const next = { ...current }; const line = next[id]; if (!line) return current; const quantity = line.quantity + delta; if (quantity <= 0) delete next[id]; else next[id] = { ...line, quantity }; return next; });
   const submitOrder = () => {
     if (!lines.length) return;
@@ -65,12 +65,12 @@ export default function PosPage() {
 
   return (
     <div className="page-stack pos-page">
-      <header className="page-heading"><div><span className="eyebrow">ثبت سریع و دقیق سفارش</span><h1>سفارش‌ها و صندوق فروش</h1><p>سریع در صندوق، دقیق در آشپزخانه و متصل به موجودی انبار.</p></div>{user?.role === "root" && <Button variant="secondary" onClick={() => setMenuModal("new")}><CirclePlus size={18} /> محصول منو</Button>}</header>
+      <header className="page-heading"><div><span className="eyebrow">ثبت سریع و دقیق سفارش</span><h1>سفارش‌ها و صندوق فروش</h1><p>سریع در صندوق، دقیق در آشپزخانه و متصل به موجودی انبار.</p></div>{user && ["root", "accounting_manager", "sales_manager"].includes(user.role) && <Button variant="secondary" onClick={() => setMenuModal("new")}><CirclePlus size={18} /> محصول منو</Button>}</header>
       <div className="pos-layout">
         <section className="panel product-browser">
           <div className="pos-search"><label className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جست‌وجو در منو…" /></label></div>
           <div className="category-pills">{categories.map((name) => <button key={name} className={category === name ? "active" : ""} onClick={() => setCategory(name)}>{name}</button>)}</div>
-          {menu.isLoading ? <div className="center-loader"><Spinner /></div> : filteredMenu.length ? <div className="menu-grid">{filteredMenu.map((item) => <button className="menu-card" key={item.id} onClick={() => add(item)}>{item.image_path ? <img src={assetUrl(item.image_path)} alt="" /> : <span className="menu-placeholder"><ShoppingBag /></span>}<div><strong>{item.name}</strong><small>{item.category}</small><b>{money(item.selling_price)}</b></div>{cart[item.id] && <i>{quantity(cart[item.id].quantity)}</i>}{user?.role === "root" && <span className="menu-edit" onClick={(event) => { event.stopPropagation(); setMenuModal(item); }}>ویرایش</span>}</button>)}</div> : <EmptyState icon={<ShoppingBag />} title="محصولی در منو نیست" text="مدیر کل می‌تواند محصولات فروش را به منو اضافه کند." />}
+          {menu.isLoading ? <div className="center-loader"><Spinner /></div> : filteredMenu.length ? <div className="menu-grid">{filteredMenu.map((item) => <button className={`menu-card ${!item.is_available ? "unavailable" : ""}`} disabled={!item.is_available} key={item.id} onClick={() => add(item)}>{item.image_path ? <img src={assetUrl(item.image_path)} alt="" /> : <span className="menu-placeholder"><ShoppingBag /></span>}<div><strong>{item.name}</strong><small>{item.category}</small><b>{money(item.selling_price)}</b>{!item.is_available && <em>ناموجود</em>}</div>{cart[item.id] && <i>{quantity(cart[item.id].quantity)}</i>}{user && ["root", "accounting_manager", "sales_manager"].includes(user.role) && <span className="menu-edit" onClick={(event) => { event.stopPropagation(); setMenuModal(item); }}>ویرایش</span>}</button>)}</div> : <EmptyState icon={<ShoppingBag />} title="محصولی در منو نیست" text="از بخش مدیریت منو، محصولات فروش را تعریف و به انبار متصل کنید." />}
         </section>
         <aside className="panel cart-panel">
           <header className="cart-head"><div><span className="cart-number"><ReceiptText size={18} /></span><div><h2>سفارش جاری</h2><small>{quantity(lines.reduce((n, line) => n + line.quantity, 0))} قلم</small></div></div>{lines.length > 0 && <button onClick={() => setCart({})}>پاک کردن</button>}</header>

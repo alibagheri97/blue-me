@@ -35,6 +35,7 @@ from app.schemas import (
     PriceRequestCreate,
     PriceRequestRead,
 )
+from app.services.inventory_alerts import sync_auto_purchase_need
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 inventory_roles = require_roles(UserRole.ROOT, UserRole.STORAGE_MANAGER)
@@ -213,6 +214,7 @@ def create_item(
         details={"sku": item.sku, "price_requires_approval": actor.role != UserRole.ROOT},
         ip_address=client_ip(request),
     )
+    sync_auto_purchase_need(db, item=item, actor=actor)
     db.commit()
     return get_item_or_404(db, item.id)
 
@@ -249,6 +251,14 @@ def update_item(
     if "category_id" in changes and changes["category_id"] is not None:
         if db.get(Category, changes["category_id"]) is None:
             raise HTTPException(status_code=400, detail="Category does not exist")
+    reorder_level = Decimal(changes.get("reorder_level", item.reorder_level))
+    target_stock = Decimal(changes.get("target_stock_level", item.target_stock_level))
+    auto_enabled = changes.get("auto_reorder_enabled", item.auto_reorder_enabled)
+    if auto_enabled and target_stock <= reorder_level:
+        raise HTTPException(
+            status_code=422,
+            detail="Target stock must be greater than the reorder level when automatic shopping is enabled",
+        )
     for key, value in changes.items():
         setattr(item, key, value)
     record_audit(
@@ -262,6 +272,7 @@ def update_item(
         details={key: str(value) for key, value in changes.items()},
         ip_address=client_ip(request),
     )
+    sync_auto_purchase_need(db, item=item, actor=actor)
     db.commit()
     return get_item(item.id, actor, db)
 
@@ -275,6 +286,7 @@ def archive_item(
 ) -> None:
     item = get_item_or_404(db, item_id, lock=True)
     item.is_active = False
+    sync_auto_purchase_need(db, item=item, actor=actor)
     record_audit(
         db,
         actor=actor,
@@ -326,6 +338,12 @@ def create_movement(
     item.current_quantity = after
     db.add(movement)
     db.flush()
+    sync_auto_purchase_need(
+        db,
+        item=item,
+        actor=actor,
+        supply_received=movement_type == MovementType.RECEIVE,
+    )
     record_audit(
         db,
         actor=actor,

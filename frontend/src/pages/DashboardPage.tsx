@@ -14,6 +14,8 @@ interface Dashboard {
   low_stock_count: number;
   pending_price_approvals: number;
   pending_daily_needs: number;
+  automatic_purchase_needs: number;
+  unread_notifications: number;
   active_users: number;
   orders_in_kitchen: number;
   sales_change_percent: string;
@@ -39,8 +41,8 @@ export default function DashboardPage() {
       <section className="metric-grid">
         <article className="metric-card metric-primary"><span className="metric-icon"><CircleDollarSign /></span><div><small>فروش امروز</small><strong>{money(data.sales_today)}</strong><span className={change >= 0 ? "trend-positive" : "trend-negative"}>{change >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}{quantity(Math.abs(change))}٪ نسبت به دیروز</span></div></article>
         <article className="metric-card"><span className="metric-icon mint"><ReceiptText /></span><div><small>سفارش‌های امروز</small><strong>{quantity(data.orders_today)}</strong><span>میانگین هر سفارش {money(data.average_order_value)}</span></div></article>
-        <article className="metric-card"><span className="metric-icon amber"><PackageCheck /></span><div><small>هشدار موجودی</small><strong>{quantity(data.low_stock_count)}</strong><span>{quantity(data.pending_price_approvals)} درخواست قیمت در انتظار</span></div></article>
-        <article className="metric-card"><span className="metric-icon violet"><ChefHat /></span><div><small>صف آشپزخانه</small><strong>{quantity(data.orders_in_kitchen)}</strong><span>{quantity(data.pending_daily_needs)} نیاز خرید در انتظار</span></div></article>
+        <article className="metric-card"><span className="metric-icon amber"><PackageCheck /></span><div><small>هشدار موجودی</small><strong>{quantity(data.low_stock_count)}</strong><span>{quantity(data.automatic_purchase_needs)} پیشنهاد خودکار خرید فردا</span></div></article>
+        <article className="metric-card"><span className="metric-icon violet"><ChefHat /></span><div><small>صف آشپزخانه</small><strong>{quantity(data.orders_in_kitchen)}</strong><span>{quantity(data.pending_daily_needs)} نیاز خرید · {quantity(data.unread_notifications)} اعلان تازه</span></div></article>
       </section>
 
       <section className="dashboard-grid">
