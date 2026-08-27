@@ -128,7 +128,7 @@ function ReceiptModal({ receipt, brand, close }: { receipt: ReceiptState | null;
     <div className={`receipt receipt-mode-${mode}`} id="printable-receipt" dir="rtl">
       <header className="receipt-header">
         {brand.logo_url && <img src={brand.logo_url} alt="" />}
-        <span className="receipt-copy-label">{mode === "kitchen" ? "فیش آماده‌سازی" : "رسید رسمی فروش"}</span>
+        <span className="receipt-copy-label">{mode === "kitchen" ? "فیش آماده‌سازی" : "شاورماچی"}</span>
         <h2>{mode === "kitchen" ? "آشپزخانه" : brand.business_name}</h2>
         <div className="receipt-order-number"><small>شماره سفارش</small><strong>{order.order_number}</strong></div>
         <p>{dateTime(order.created_at)}</p>
