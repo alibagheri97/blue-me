@@ -1,5 +1,13 @@
 @import url("https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800&display=swap");
 
+@font-face {
+  font-family: "BlueMe Receipt";
+  src: url("./assets/Vazirmatn-ExtraBold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 800;
+  font-display: block;
+}
+
 :root {
   --brand: #2563eb;
   --brand-dark: color-mix(in srgb, var(--brand), #0f172a 24%);
@@ -204,6 +212,19 @@ tbody tr:last-child td { border-bottom: 0; }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 6px; }
 .form-error { padding: 9px 11px; color: #b42323; background: #fff0f0; border: 1px solid #fed3d3; border-radius: 7px; font-size: 11px; }
 .info-callout { padding: 11px; color: #2f5f9d; background: #eef5ff; border: 1px solid #dbeaff; border-radius: 8px; font-size: 11px; }
+.pricing-editor { overflow: hidden; background: linear-gradient(145deg, #f8fbff, #f5f8fc); border: 1px solid #dce6f2; border-radius: 12px; }
+.pricing-editor > header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px; background: rgb(255 255 255 / 72%); border-bottom: 1px solid #e2e9f2; }
+.pricing-editor > header > div { min-width: 0; }
+.pricing-editor h3 { margin-top: 2px; font-size: 15px; }
+.pricing-editor header p { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.pricing-kicker { color: var(--brand); font-size: 9px; font-weight: 700; }
+.unit-pill { flex: 0 0 auto; padding: 7px 11px; color: var(--brand); background: color-mix(in srgb, var(--brand), white 91%); border: 1px solid color-mix(in srgb, var(--brand), white 76%); border-radius: 999px; font-size: 10px; font-weight: 700; }
+.pricing-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px 18px 12px; }
+.pricing-fields .field > span { color: #25344a; font-size: 11px; }
+.pricing-fields .field > small { min-height: 28px; color: #7c899a; font-size: 9px; line-height: 1.5; }
+.pricing-fields input { direction: ltr; text-align: left; font: 700 14px "Vazirmatn"; }
+.pricing-note { display: flex; align-items: flex-start; gap: 8px; margin: 0 18px 16px; padding: 10px 12px; color: #365a88; background: #eaf3ff; border-radius: 8px; font-size: 10px; line-height: 1.7; }
+.pricing-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--brand); }
 .password-field { position: relative; display: block !important; }
 .password-field input { padding-inline-end: 45px; }
 .password-field button { position: absolute; top: 3px; inset-inline-end: 4px; width: 34px; height: 34px; display: grid; place-items: center; color: #7d899a; border: 0; background: transparent; cursor: pointer; }
@@ -320,8 +341,10 @@ tbody tr:last-child td { border-bottom: 0; }
 /* POS */
 .pos-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(360px, .75fr); gap: 15px; align-items: start; }
 .product-browser { min-height: 690px; overflow: hidden; }
-.pos-search { padding: 16px 16px 10px; }
+.pos-search { display: flex; align-items: center; gap: 10px; padding: 16px 16px 10px; }
 .pos-search .search-box { width: 100%; }
+.pos-menu-source { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; color: #3f4d61; font-size: 9px; font-weight: 600; white-space: nowrap; }
+.pos-menu-source svg { color: var(--success); }
 .category-pills { display: flex; gap: 7px; padding: 0 16px 14px; overflow-x: auto; }
 .category-pills button { flex: 0 0 auto; padding: 7px 12px; color: #667287; background: #f5f7fa; border: 1px solid #e6eaf0; border-radius: 999px; font-size: 10px; cursor: pointer; }
 .category-pills button.active { color: #fff; background: var(--brand); border-color: var(--brand); }
@@ -399,21 +422,41 @@ tbody tr:last-child td { border-bottom: 0; }
 .order-detail-lines small { color: #c26916; font-size: 9px; }
 .order-detail-total { display: flex; justify-content: space-between; padding: 12px 2px; font-weight: 700; }
 .receipt-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 5px 0 10px; }
-.receipt { width: 320px; margin: auto; padding: 24px 20px; color: #111; background: #fff; border: 1px dashed #adb5bd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.receipt header { display: grid; justify-items: center; gap: 5px; padding-bottom: 15px; border-bottom: 1px dashed #555; text-align: center; }
-.receipt header img { max-width: 55px; max-height: 55px; object-fit: contain; }
-.receipt header h2 { font: 700 17px ui-monospace; }
-.receipt header p { font-size: 9px; }
-.receipt-lines > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px dotted #aaa; font-size: 10px; }
-.receipt-lines span { display: grid; }
-.receipt-lines em { margin-top: 4px; color: #111; background: #eee; font-size: 9px; font-style: normal; font-weight: 700; }
-.receipt-summary { display: grid; gap: 5px; padding: 12px 0; }
-.receipt-summary span { display: flex; justify-content: space-between; font-size: 10px; }
-.receipt-summary span:nth-child(3) { margin-top: 4px; padding-top: 8px; border-top: 1px solid #222; font-size: 13px; }
-.receipt-summary small { margin-top: 6px; font-size: 9px; text-transform: capitalize; }
-.receipt > footer { padding-top: 14px; border-top: 1px dashed #555; font-size: 9px; text-align: center; }
-.kitchen-order-note { margin: 10px 0; padding: 8px; border: 2px solid #111; font-size: 10px; font-weight: 700; }
+.receipt { width: min(100%,80mm); max-width: 80mm; display: block; overflow: hidden; margin: auto; padding: 5mm 4mm; color: #000; background: #fff; border: 2px solid #000; font-family: "BlueMe Receipt", "Vazirmatn", Tahoma, sans-serif; font-size: 13px; font-weight: 800; line-height: 1.6; text-rendering: optimizeLegibility; font-variant-numeric: tabular-nums; }
+.receipt, .receipt * { color: #000 !important; box-shadow: none !important; text-shadow: none !important; font-family: inherit !important; font-weight: 800 !important; opacity: 1 !important; }
+.receipt > * { width: 100%; min-width: 0; }
+.receipt-header { display: grid; justify-items: center; gap: 6px; padding-bottom: 13px; border-bottom: 3px solid #000; text-align: center; }
+.receipt-header img { max-width: 58px; max-height: 58px; object-fit: contain; filter: grayscale(1) contrast(1.55); }
+.receipt-copy-label { padding: 2px 10px; border: 2px solid #000; border-radius: 999px; font-size: 11px; letter-spacing: .02em; }
+.receipt-header h2 { font-size: 22px; line-height: 1.35; }
+.receipt-order-number { display: grid; justify-items: center; gap: 1px; padding: 4px 11px; border: 2px solid #000; }
+.receipt-order-number small { font-size: 10px; }
+.receipt-order-number strong { direction: ltr; font-size: 16px; letter-spacing: .04em; }
+.receipt-header p { font-size: 12px; }
+.receipt-customer { display: flex; justify-content: space-between; gap: 10px; padding: 11px 0; border-bottom: 2px dashed #000; font-size: 13px; }
+.receipt-columns { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0 5px; border-bottom: 3px solid #000; font-size: 12px; }
+.receipt-lines > div { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding: 11px 0; border-bottom: 2px dotted #000; font-size: 14px; break-inside: avoid; }
+.receipt-line-main { min-width: 0; display: grid; gap: 3px; overflow-wrap: anywhere; }
+.receipt-line-main > b { font-size: 15px; line-height: 1.55; }
+.receipt-lines small { font-size: 12px; }
+.receipt-lines em { margin-top: 4px; padding: 5px 6px; border: 3px solid #000; background: #fff; font-size: 13px; font-style: normal; line-height: 1.65; }
+.receipt-lines > div > strong { flex: 0 0 auto; font-size: 13px; white-space: nowrap; }
+.kitchen-quantity { font-size: 15px !important; }
+.receipt-summary { display: grid; gap: 7px; padding: 13px 0; break-inside: avoid; }
+.receipt-summary span { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.receipt-summary .receipt-grand-total { margin-top: 3px; padding-top: 9px; border-top: 3px solid #000; font-size: 18px; line-height: 1.45; }
+.receipt-summary small { margin-top: 4px; font-size: 11px; }
+.receipt-quote { width: 100%; margin: 13px 0; padding: 11px 0; border-block: 4px double #000; text-align: center; break-inside: avoid; }
+.receipt-quote figcaption { font-size: 10px; letter-spacing: .06em; }
+.receipt-quote blockquote { margin: 7px 0; font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
+.receipt-quote cite { display: block; font-size: 11px; font-style: normal; }
+.receipt > footer { display: grid; justify-items: center; gap: 3px; padding-top: 12px; border-top: 3px solid #000; font-size: 11px; text-align: center; break-inside: avoid; }
+.receipt > footer strong { font-size: 14px; }
+.receipt > footer small { direction: ltr; font-size: 11px; letter-spacing: .04em; }
+.kitchen-order-note { display: grid; gap: 4px; margin: 11px 0; padding: 9px; border: 3px solid #000; font-size: 14px; line-height: 1.65; break-inside: avoid; }
+.kitchen-order-note span { font-size: 11px; }
 .print-trigger { margin-top: 14px; }
+.receipt-print-note { margin-top: 10px; color: var(--muted); font-size: 9px; text-align: center; }
 
 /* Kitchen */
 .kitchen-board { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 13px; align-items: start; }
@@ -667,6 +710,11 @@ tbody tr:last-child td { border-bottom: 0; }
   .approval-row > .badge { grid-row: 1; grid-column: 2; }
   .approval-actions { grid-row: 2; grid-column: 2; }
   .form-grid { grid-template-columns: 1fr; }
+  .pricing-editor > header { align-items: flex-start; padding: 14px; }
+  .pricing-editor header p { max-width: 240px; }
+  .pricing-fields { grid-template-columns: 1fr; padding: 14px; }
+  .pricing-fields .field > small { min-height: 0; }
+  .pricing-note { margin: 0 14px 14px; }
   .ingredient-picker-results { grid-template-columns: 1fr; }
   .output-ingredient-lines > div { grid-template-columns: minmax(90px,1fr) 112px 28px; }
   .field-wide { grid-column: auto; }
@@ -700,9 +748,24 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 @media print {
+  html, body { width: 80mm !important; min-width: 0 !important; background: #fff !important; }
   body * { visibility: hidden !important; }
   #printable-receipt, #printable-receipt * { visibility: visible !important; }
-  #printable-receipt { position: fixed; inset: 0 auto auto 0; width: 80mm; margin: 0; padding: 5mm; border: 0; }
+  #printable-receipt { position: absolute; inset: 0 auto auto 0; width: 80mm; max-width: 80mm; display: block !important; overflow: hidden; margin: 0; padding: 4mm; border: 0; color: #000 !important; background: #fff !important; filter: none; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  #printable-receipt, #printable-receipt * { color: #000 !important; background-color: #fff !important; box-shadow: none !important; text-shadow: none !important; font-family: "BlueMe Receipt", "Vazirmatn", Tahoma, sans-serif !important; font-size: 11pt !important; font-style: normal !important; font-weight: 800 !important; line-height: 1.55 !important; opacity: 1 !important; }
+  #printable-receipt .receipt-header { padding-bottom: 3.5mm; border-bottom: 3px solid #000; }
+  #printable-receipt .receipt-header h2 { font-size: 18pt !important; line-height: 1.3 !important; }
+  #printable-receipt .receipt-copy-label { font-size: 11pt !important; border-width: 2px; }
+  #printable-receipt .receipt-order-number strong { font-size: 15pt !important; }
+  #printable-receipt .receipt-line-main > b { font-size: 13pt !important; }
+  #printable-receipt .receipt-lines em { border-width: 3px; }
+  #printable-receipt .kitchen-quantity { font-size: 14pt !important; }
+  #printable-receipt .receipt-grand-total { font-size: 16pt !important; border-top-width: 3px; }
+  #printable-receipt .receipt-quote { border-block-width: 4px; }
+  #printable-receipt .receipt-quote figcaption, #printable-receipt .receipt-quote cite { font-size: 11pt !important; }
+  #printable-receipt .receipt-quote blockquote { font-size: 11.5pt !important; line-height: 1.85 !important; }
+  #printable-receipt > footer strong { font-size: 13pt !important; }
+  #printable-receipt img { filter: grayscale(1) contrast(1.7) !important; }
   @page { size: 80mm auto; margin: 0; }
 }
 
@@ -879,6 +942,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .menu-product-top h3 { margin: 0; font-size: 13px; }
 .menu-product-top small { color: var(--muted); font-size: 9px; }
 .menu-status-row { min-height: 24px; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.toggle-field { min-height: 42px; display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; }
+.toggle-field > input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; flex: 0 0 auto; margin: 0; padding: 0; accent-color: var(--brand); }
+.toggle-field > span { min-width: 0; display: grid; gap: 2px; }
+.menu-visibility-toggle > span strong { font-size: 10px; }
+.menu-visibility-toggle > span small { color: var(--muted); font-size: 8px; line-height: 1.5; }
 .menu-recipe-preview { display: grid; gap: 0; padding: 9px 10px; border: 1px solid #dbe8e3; border-radius: 10px; background: #f3faf7; }
 .menu-recipe-preview header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid #dcebe5; color: #31705a; font-size: 8px; font-weight: 700; }
 .menu-recipe-preview header b { padding: 3px 6px; border-radius: 999px; color: #047857; background: #dff5eb; font-size: 7px; }

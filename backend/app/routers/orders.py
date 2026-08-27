@@ -37,11 +37,17 @@ from app.schemas import (
     OrderStatusUpdate,
 )
 from app.services.inventory_alerts import sync_auto_purchase_need
+from app.services.persian_quotes import quote_for_order
 
 router = APIRouter(tags=["orders"])
-sales_roles = require_roles(UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.SALES_MANAGER)
+sales_roles = require_roles(
+    UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.SALES_MANAGER
+)
 order_view_roles = require_roles(
-    UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.SALES_MANAGER, UserRole.KITCHEN_MANAGER
+    UserRole.ROOT,
+    UserRole.ACCOUNTING_MANAGER,
+    UserRole.SALES_MANAGER,
+    UserRole.KITCHEN_MANAGER,
 )
 
 
@@ -67,13 +73,16 @@ def serialize_menu_item(item: MenuItem) -> dict:
     elif item.recipe is not None and item.recipe.ingredients:
         configured = True
         yield_quantity = Decimal(item.recipe.yield_quantity)
-        cost = sum(
-            (
-                Decimal(line.quantity) * Decimal(line.inventory_item.average_cost)
-                for line in item.recipe.ingredients
-            ),
-            Decimal("0"),
-        ) / yield_quantity
+        cost = (
+            sum(
+                (
+                    Decimal(line.quantity) * Decimal(line.inventory_item.average_cost)
+                    for line in item.recipe.ingredients
+                ),
+                Decimal("0"),
+            )
+            / yield_quantity
+        )
         max_available = min(
             int(
                 Decimal(line.inventory_item.current_quantity)
@@ -130,7 +139,9 @@ def validate_direct_inventory(db: Session, inventory_item_id: int | None) -> Non
         return
     item = db.get(InventoryItem, inventory_item_id)
     if item is None or not item.is_active:
-        raise HTTPException(status_code=422, detail="Inventory item for direct sale is unavailable")
+        raise HTTPException(
+            status_code=422, detail="Inventory item for direct sale is unavailable"
+        )
 
 
 def order_query():
@@ -160,7 +171,9 @@ def search_customers(
     return list(db.scalars(query.order_by(Customer.updated_at.desc()).limit(30)))
 
 
-@router.post("/customers", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/customers", response_model=CustomerRead, status_code=status.HTTP_201_CREATED
+)
 def create_customer(
     payload: CustomerCreate,
     request: Request,
@@ -169,7 +182,9 @@ def create_customer(
 ) -> Customer:
     existing = db.scalar(select(Customer).where(Customer.phone == payload.phone))
     if existing:
-        raise HTTPException(status_code=409, detail="A customer with this phone number already exists")
+        raise HTTPException(
+            status_code=409, detail="A customer with this phone number already exists"
+        )
     customer = Customer(**payload.model_dump())
     db.add(customer)
     db.flush()
@@ -209,7 +224,9 @@ def create_menu_category(
     db: Session = Depends(get_db),
 ) -> MenuCategory:
     if db.scalar(
-        select(MenuCategory.id).where(func.lower(MenuCategory.name) == payload.name.lower())
+        select(MenuCategory.id).where(
+            func.lower(MenuCategory.name) == payload.name.lower()
+        )
     ):
         raise HTTPException(status_code=409, detail="Menu category already exists")
     category = MenuCategory(**payload.model_dump())
@@ -243,14 +260,17 @@ def update_menu_category(
         raise HTTPException(status_code=404, detail="Menu category not found")
     duplicate = db.scalar(
         select(MenuCategory.id).where(
-            func.lower(MenuCategory.name) == payload.name.lower(), MenuCategory.id != category_id
+            func.lower(MenuCategory.name) == payload.name.lower(),
+            MenuCategory.id != category_id,
         )
     )
     if duplicate:
         raise HTTPException(status_code=409, detail="Menu category name already exists")
     for key, value in payload.model_dump().items():
         setattr(category, key, value)
-    for menu_item in db.scalars(select(MenuItem).where(MenuItem.category_id == category.id)):
+    for menu_item in db.scalars(
+        select(MenuItem).where(MenuItem.category_id == category.id)
+    ):
         menu_item.category = category.name
     record_audit(
         db,
@@ -278,9 +298,13 @@ def delete_menu_category(
     if category is None:
         raise HTTPException(status_code=404, detail="Menu category not found")
     if db.scalar(
-        select(func.count()).select_from(MenuItem).where(MenuItem.category_id == category.id)
+        select(func.count())
+        .select_from(MenuItem)
+        .where(MenuItem.category_id == category.id)
     ):
-        raise HTTPException(status_code=409, detail="Move menu items before deleting this category")
+        raise HTTPException(
+            status_code=409, detail="Move menu items before deleting this category"
+        )
     record_audit(
         db,
         actor=actor,
@@ -308,10 +332,14 @@ def list_menu_items(
         query = query.where(MenuItem.is_active == active)
     if search:
         term = f"%{search.strip()}%"
-        query = query.where(or_(MenuItem.name.ilike(term), MenuItem.category.ilike(term)))
+        query = query.where(
+            or_(MenuItem.name.ilike(term), MenuItem.category.ilike(term))
+        )
     return [
         serialize_menu_item(item)
-        for item in db.scalars(query.order_by(MenuItem.category, MenuItem.name)).unique()
+        for item in db.scalars(
+            query.order_by(MenuItem.category, MenuItem.name)
+        ).unique()
     ]
 
 
@@ -406,12 +434,13 @@ def create_order(
     menu_items = {
         item.id: item
         for item in db.scalars(
-            menu_query()
-            .where(MenuItem.id.in_(menu_ids), MenuItem.is_active.is_(True))
+            menu_query().where(MenuItem.id.in_(menu_ids), MenuItem.is_active.is_(True))
         ).unique()
     }
     if len(menu_items) != len(menu_ids):
-        raise HTTPException(status_code=400, detail="One or more menu items are unavailable")
+        raise HTTPException(
+            status_code=400, detail="One or more menu items are unavailable"
+        )
 
     customer: Customer | None = None
     if payload.customer_id is not None:
@@ -419,18 +448,25 @@ def create_order(
         if customer is None:
             raise HTTPException(status_code=400, detail="Customer not found")
     elif payload.customer is not None:
-        customer = db.scalar(select(Customer).where(Customer.phone == payload.customer.phone))
+        customer = db.scalar(
+            select(Customer).where(Customer.phone == payload.customer.phone)
+        )
         if customer is None:
             customer = Customer(**payload.customer.model_dump())
             db.add(customer)
             db.flush()
 
     subtotal = sum(
-        (menu_items[line.menu_item_id].selling_price * line.quantity for line in payload.items),
+        (
+            menu_items[line.menu_item_id].selling_price * line.quantity
+            for line in payload.items
+        ),
         Decimal("0"),
     )
     if payload.discount > subtotal:
-        raise HTTPException(status_code=422, detail="Discount cannot be greater than subtotal")
+        raise HTTPException(
+            status_code=422, detail="Discount cannot be greater than subtotal"
+        )
 
     required_stock: dict[int, Decimal] = {}
     unit_costs: dict[int, Decimal] = {}
@@ -454,9 +490,12 @@ def create_order(
                 )
                 amount = amount_per_sale * line.quantity
                 required_stock[ingredient.inventory_item_id] = (
-                    required_stock.get(ingredient.inventory_item_id, Decimal("0")) + amount
+                    required_stock.get(ingredient.inventory_item_id, Decimal("0"))
+                    + amount
                 )
-                recipe_cost += amount_per_sale * Decimal(ingredient.inventory_item.average_cost)
+                recipe_cost += amount_per_sale * Decimal(
+                    ingredient.inventory_item.average_cost
+                )
             unit_costs[menu_item.id] = recipe_cost
         else:
             unconfigured.append(menu_item.name)
@@ -489,7 +528,10 @@ def create_order(
                 f"{stock_item.name}: نیاز {needed}، موجودی {stock_item.current_quantity}"
             )
     if shortages:
-        raise HTTPException(status_code=409, detail={"message": "Insufficient ingredients", "items": shortages})
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Insufficient ingredients", "items": shortages},
+        )
 
     order = Order(
         order_number=f"BM-{date.today():%y%m%d}-{uuid4().hex[:6].upper()}",
@@ -540,7 +582,8 @@ def create_order(
         )
         sync_auto_purchase_need(db, item=stock_item, actor=actor)
     total_cogs = sum(
-        (unit_costs[line.menu_item_id] * line.quantity for line in payload.items), Decimal("0")
+        (unit_costs[line.menu_item_id] * line.quantity for line in payload.items),
+        Decimal("0"),
     )
     record_audit(
         db,
@@ -581,8 +624,12 @@ def list_orders(
         query = query.where(Order.created_at.between(start, end))
     if search:
         term = f"%{search.strip()}%"
-        query = query.where(or_(Order.order_number.ilike(term), Order.customer_name.ilike(term)))
-    return list(db.scalars(query.order_by(Order.created_at.desc()).limit(limit)).unique())
+        query = query.where(
+            or_(Order.order_number.ilike(term), Order.customer_name.ilike(term))
+        )
+    return list(
+        db.scalars(query.order_by(Order.created_at.desc()).limit(limit)).unique()
+    )
 
 
 @router.get("/orders/{order_id}", response_model=OrderRead)
@@ -617,7 +664,9 @@ def update_order_status(
         OrderStatus.CANCELLED,
         OrderStatus.COMPLETED,
     }:
-        raise HTTPException(status_code=403, detail="Kitchen managers can only mark preparing or ready")
+        raise HTTPException(
+            status_code=403, detail="Kitchen managers can only mark preparing or ready"
+        )
 
     previous = order.status
     if payload.status == OrderStatus.CANCELLED:
@@ -636,7 +685,10 @@ def update_order_status(
         stocks = {
             item.id: item
             for item in db.scalars(
-                select(InventoryItem).where(InventoryItem.id.in_(inventory_ids)).order_by(InventoryItem.id).with_for_update()
+                select(InventoryItem)
+                .where(InventoryItem.id.in_(inventory_ids))
+                .order_by(InventoryItem.id)
+                .with_for_update()
             )
         }
         for movement in movements:
@@ -682,14 +734,25 @@ def receipt_data(
     order = get_order_or_404(db, order_id)
     return {
         "order": OrderRead.model_validate(order),
+        "quote": quote_for_order(order.order_number),
         "customer_copy": {
-            "title": "Customer receipt",
+            "title": "رسید مشتری",
             "show_prices": True,
-            "footer": "Thank you for your order",
+            "footer": "از خرید شما سپاسگزاریم",
+            "paper_width_mm": 80,
+            "monochrome": True,
+            "high_contrast": True,
+            "font_weight": 800,
+            "minimum_font_size_pt": 11,
         },
         "kitchen_copy": {
-            "title": "Kitchen ticket",
+            "title": "فیش آشپزخانه",
             "show_prices": False,
             "highlight_notes": True,
+            "paper_width_mm": 80,
+            "monochrome": True,
+            "high_contrast": True,
+            "font_weight": 800,
+            "minimum_font_size_pt": 11,
         },
     }

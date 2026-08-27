@@ -10,6 +10,7 @@ from app.models import (
     NeedPriority,
     OrderStatus,
     PaymentMethod,
+    PriceType,
     PurchaseStatus,
     UserRole,
 )
@@ -111,6 +112,7 @@ class InventoryItemCreate(BaseModel):
         default=Decimal("0"), ge=0, max_digits=14, decimal_places=3
     )
     auto_reorder_enabled: bool = False
+    purchase_price: PositiveMoney = Decimal("0")
     selling_price: PositiveMoney = Decimal("0")
     description: str | None = Field(default=None, max_length=5000)
 
@@ -129,6 +131,9 @@ class InventoryItemUpdate(BaseModel):
     reorder_level: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=3)
     target_stock_level: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=3)
     auto_reorder_enabled: bool | None = None
+    purchase_price: PositiveMoney | None = None
+    selling_price: PositiveMoney | None = None
+    price_change_reason: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=5000)
     is_active: bool | None = None
 
@@ -268,6 +273,7 @@ class PurchaseVoid(BaseModel):
 
 
 class PriceRequestCreate(BaseModel):
+    price_type: PriceType = PriceType.SELLING
     requested_price: PositiveMoney
     reason: str = Field(min_length=3, max_length=500)
 
@@ -280,6 +286,7 @@ class ApprovalDecision(BaseModel):
 class PriceRequestRead(ORMModel):
     id: int
     item_id: int
+    price_type: PriceType
     old_price: Decimal
     requested_price: Decimal
     reason: str

@@ -18,6 +18,7 @@ from app.models import (
     InventoryItem,
     MovementType,
     PriceChangeRequest,
+    PriceType,
     StockMovement,
     User,
     UserRole,
@@ -51,6 +52,140 @@ def get_item_or_404(db: Session, item_id: int, *, lock: bool = False) -> Invento
     if item is None:
         raise HTTPException(status_code=404, detail="Inventory item not found")
     return item
+
+
+PRICE_LABELS = {
+    PriceType.PURCHASE: "purchase",
+    PriceType.SELLING: "selling",
+}
+
+
+def item_price(item: InventoryItem, price_type: PriceType) -> Decimal:
+    if price_type == PriceType.PURCHASE:
+        return Decimal(item.average_cost)
+    return Decimal(item.selling_price)
+
+
+def apply_item_price(item: InventoryItem, price_type: PriceType, value: Decimal) -> None:
+    if price_type == PriceType.PURCHASE:
+        # A manual purchase-price edit intentionally revalues current stock and becomes the
+        # reference price shown for the next intake. Historic receipts and order costs remain intact.
+        item.average_cost = value
+        item.last_purchase_price = value
+    else:
+        item.selling_price = value
+
+
+def stage_price_change(
+    db: Session,
+    *,
+    item: InventoryItem,
+    actor: User,
+    price_type: PriceType,
+    requested_price: Decimal,
+    reason: str | None,
+) -> PriceChangeRequest | None:
+    old_price = item_price(item, price_type)
+    requested_price = Decimal(requested_price)
+    if requested_price == old_price:
+        return None
+
+    clean_reason = (reason or "").strip()
+    if len(clean_reason) < 3:
+        if actor.role == UserRole.ROOT:
+            clean_reason = "Edited from inventory item form"
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="A reason is required when requesting a purchase or selling price change",
+            )
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    if actor.role == UserRole.ROOT:
+        pending_requests = list(
+            db.scalars(
+                select(PriceChangeRequest).where(
+                    PriceChangeRequest.item_id == item.id,
+                    PriceChangeRequest.price_type == price_type,
+                    PriceChangeRequest.status == ApprovalStatus.PENDING,
+                )
+            )
+        )
+        for pending in pending_requests:
+            pending.status = ApprovalStatus.CANCELLED
+            pending.decided_by_id = actor.id
+            pending.decision_note = "Superseded by a direct root price edit"
+            pending.decided_at = now
+        apply_item_price(item, price_type, requested_price)
+        price_request = PriceChangeRequest(
+            item_id=item.id,
+            price_type=price_type,
+            old_price=old_price,
+            requested_price=requested_price,
+            reason=clean_reason,
+            status=ApprovalStatus.APPROVED,
+            requested_by_id=actor.id,
+            decided_by_id=actor.id,
+            decision_note="Changed directly by root",
+            decided_at=now,
+        )
+    else:
+        existing = db.scalar(
+            select(PriceChangeRequest.id).where(
+                PriceChangeRequest.item_id == item.id,
+                PriceChangeRequest.price_type == price_type,
+                PriceChangeRequest.status == ApprovalStatus.PENDING,
+            )
+        )
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This item already has a pending {PRICE_LABELS[price_type]} price request",
+            )
+        price_request = PriceChangeRequest(
+            item_id=item.id,
+            price_type=price_type,
+            old_price=old_price,
+            requested_price=requested_price,
+            reason=clean_reason,
+            requested_by_id=actor.id,
+        )
+    db.add(price_request)
+    db.flush()
+    return price_request
+
+
+def audit_price_change(
+    db: Session,
+    *,
+    actor: User,
+    item: InventoryItem,
+    price_request: PriceChangeRequest,
+    request: Request,
+) -> None:
+    label = PRICE_LABELS[price_request.price_type]
+    record_audit(
+        db,
+        actor=actor,
+        action="price_changed" if actor.role == UserRole.ROOT else "price_change_requested",
+        category="approvals",
+        entity_type="price_change_request",
+        entity_id=price_request.id,
+        summary=(
+            f"Changed {item.name} {label} price from {price_request.old_price} "
+            f"to {price_request.requested_price}"
+            if actor.role == UserRole.ROOT
+            else f"Requested {item.name} {label} price change from {price_request.old_price} "
+            f"to {price_request.requested_price}"
+        ),
+        details={
+            "price_type": price_request.price_type.value,
+            "old_price": str(price_request.old_price),
+            "new_price": str(price_request.requested_price),
+            "reason": price_request.reason,
+        },
+        ip_address=client_ip(request),
+    )
 
 
 @router.get("/categories", response_model=list[CategoryRead])
@@ -189,20 +324,36 @@ def create_item(
     if payload.category_id is not None and db.get(Category, payload.category_id) is None:
         raise HTTPException(status_code=400, detail="Category does not exist")
     data = payload.model_dump()
-    requested_price = data.pop("selling_price")
-    item = InventoryItem(**data, selling_price=requested_price if actor.role == UserRole.ROOT else 0)
+    requested_purchase_price = data.pop("purchase_price")
+    requested_selling_price = data.pop("selling_price")
+    item = InventoryItem(**data, average_cost=0, last_purchase_price=0, selling_price=0)
     db.add(item)
     db.flush()
-    if actor.role == UserRole.STORAGE_MANAGER and requested_price > 0:
-        db.add(
-            PriceChangeRequest(
-                item_id=item.id,
-                old_price=0,
-                requested_price=requested_price,
-                reason="Initial selling price",
-                requested_by_id=actor.id,
-            )
+    initial_prices = (
+        (PriceType.PURCHASE, requested_purchase_price),
+        (PriceType.SELLING, requested_selling_price),
+    )
+    price_requests = []
+    for price_type, requested_price in initial_prices:
+        if requested_price <= 0:
+            continue
+        price_request = stage_price_change(
+            db,
+            item=item,
+            actor=actor,
+            price_type=price_type,
+            requested_price=requested_price,
+            reason=f"Initial {PRICE_LABELS[price_type]} price",
         )
+        if price_request is not None:
+            price_requests.append(price_request)
+            audit_price_change(
+                db,
+                actor=actor,
+                item=item,
+                price_request=price_request,
+                request=request,
+            )
     record_audit(
         db,
         actor=actor,
@@ -211,7 +362,11 @@ def create_item(
         entity_type="inventory_item",
         entity_id=item.id,
         summary=f"Created inventory item {item.name}",
-        details={"sku": item.sku, "price_requires_approval": actor.role != UserRole.ROOT},
+        details={
+            "sku": item.sku,
+            "price_requires_approval": actor.role != UserRole.ROOT,
+            "price_request_ids": [price_request.id for price_request in price_requests],
+        },
         ip_address=client_ip(request),
     )
     sync_auto_purchase_need(db, item=item, actor=actor)
@@ -242,6 +397,9 @@ def update_item(
 ) -> InventoryItem:
     item = get_item_or_404(db, item_id, lock=True)
     changes = payload.model_dump(exclude_unset=True)
+    requested_purchase_price = changes.pop("purchase_price", None)
+    requested_selling_price = changes.pop("selling_price", None)
+    price_change_reason = changes.pop("price_change_reason", None)
     if "sku" in changes:
         duplicate = db.scalar(
             select(InventoryItem.id).where(InventoryItem.sku == changes["sku"], InventoryItem.id != item_id)
@@ -261,6 +419,30 @@ def update_item(
         )
     for key, value in changes.items():
         setattr(item, key, value)
+    price_requests = []
+    for price_type, requested_price in (
+        (PriceType.PURCHASE, requested_purchase_price),
+        (PriceType.SELLING, requested_selling_price),
+    ):
+        if requested_price is None:
+            continue
+        price_request = stage_price_change(
+            db,
+            item=item,
+            actor=actor,
+            price_type=price_type,
+            requested_price=requested_price,
+            reason=price_change_reason,
+        )
+        if price_request is not None:
+            price_requests.append(price_request)
+            audit_price_change(
+                db,
+                actor=actor,
+                item=item,
+                price_request=price_request,
+                request=request,
+            )
     record_audit(
         db,
         actor=actor,
@@ -269,7 +451,10 @@ def update_item(
         entity_type="inventory_item",
         entity_id=item.id,
         summary=f"Updated inventory item {item.name}",
-        details={key: str(value) for key, value in changes.items()},
+        details={
+            **{key: str(value) for key, value in changes.items()},
+            "price_request_ids": [price_request.id for price_request in price_requests],
+        },
         ip_address=client_ip(request),
     )
     sync_auto_purchase_need(db, item=item, actor=actor)
@@ -387,48 +572,22 @@ def request_price_change(
     db: Session = Depends(get_db),
 ) -> PriceChangeRequest:
     item = get_item_or_404(db, item_id, lock=True)
-    if actor.role == UserRole.ROOT:
-        old_price = item.selling_price
-        item.selling_price = payload.requested_price
-        price_request = PriceChangeRequest(
-            item_id=item.id,
-            old_price=old_price,
-            requested_price=payload.requested_price,
-            reason=payload.reason,
-            status=ApprovalStatus.APPROVED,
-            requested_by_id=actor.id,
-            decided_by_id=actor.id,
-            decision_note="Changed directly by root",
-            decided_at=datetime.now(UTC).replace(tzinfo=None),
-        )
-    else:
-        existing = db.scalar(
-            select(PriceChangeRequest.id).where(
-                PriceChangeRequest.item_id == item_id,
-                PriceChangeRequest.status == ApprovalStatus.PENDING,
-            )
-        )
-        if existing:
-            raise HTTPException(status_code=409, detail="This item already has a pending price request")
-        price_request = PriceChangeRequest(
-            item_id=item.id,
-            old_price=item.selling_price,
-            requested_price=payload.requested_price,
-            reason=payload.reason,
-            requested_by_id=actor.id,
-        )
-    db.add(price_request)
-    db.flush()
-    record_audit(
+    price_request = stage_price_change(
+        db,
+        item=item,
+        actor=actor,
+        price_type=payload.price_type,
+        requested_price=payload.requested_price,
+        reason=payload.reason,
+    )
+    if price_request is None:
+        raise HTTPException(status_code=409, detail="The requested price is already active")
+    audit_price_change(
         db,
         actor=actor,
-        action="price_change_requested" if actor.role != UserRole.ROOT else "price_changed",
-        category="approvals",
-        entity_type="price_change_request",
-        entity_id=price_request.id,
-        summary=f"Requested {item.name} price change from {item.selling_price} to {payload.requested_price}",
-        details={"reason": payload.reason},
-        ip_address=client_ip(request),
+        item=item,
+        price_request=price_request,
+        request=request,
     )
     db.commit()
     query = (
@@ -478,7 +637,7 @@ def decide_price_request(
     price_request.decision_note = payload.note
     price_request.decided_at = datetime.now(UTC).replace(tzinfo=None)
     if price_request.status == ApprovalStatus.APPROVED:
-        item.selling_price = price_request.requested_price
+        apply_item_price(item, price_request.price_type, price_request.requested_price)
     record_audit(
         db,
         actor=actor,
@@ -486,8 +645,15 @@ def decide_price_request(
         category="approvals",
         entity_type="price_change_request",
         entity_id=price_request.id,
-        summary=f"{payload.status.title()} price change for {item.name}",
-        details={"old_price": str(price_request.old_price), "new_price": str(price_request.requested_price)},
+        summary=(
+            f"{payload.status.title()} {PRICE_LABELS[price_request.price_type]} price change "
+            f"for {item.name}"
+        ),
+        details={
+            "price_type": price_request.price_type.value,
+            "old_price": str(price_request.old_price),
+            "new_price": str(price_request.requested_price),
+        },
         ip_address=client_ip(request),
     )
     db.commit()
@@ -586,6 +752,7 @@ def item_report(item_id: int, _: User = Depends(all_staff), db: Session = Depend
         "price_history": [
             {
                 "date": change.decided_at or change.created_at,
+                "price_type": change.price_type.value,
                 "old_price": change.old_price,
                 "new_price": change.requested_price,
             }

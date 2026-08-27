@@ -51,6 +51,11 @@ class ApprovalStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class PriceType(str, enum.Enum):
+    PURCHASE = "purchase"
+    SELLING = "selling"
+
+
 class OrderStatus(str, enum.Enum):
     CONFIRMED = "confirmed"
     PREPARING = "preparing"
@@ -218,6 +223,11 @@ class PriceChangeRequest(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id"), index=True)
+    price_type: Mapped[PriceType] = mapped_column(
+        Enum(PriceType, native_enum=False, length=20),
+        default=PriceType.SELLING,
+        index=True,
+    )
     old_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     requested_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     reason: Mapped[str] = mapped_column(String(500))

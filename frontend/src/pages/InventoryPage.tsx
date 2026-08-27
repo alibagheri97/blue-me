@@ -9,9 +9,9 @@ import { dateTime, money, quantity, statusLabel } from "../lib/format";
 import type { Category, InventoryItem, User } from "../types";
 
 interface ItemPage { items: InventoryItem[]; total: number; page: number; page_size: number }
-interface PriceRequest { id: number; item_id: number; old_price: string; requested_price: string; reason: string; status: "pending" | "approved" | "rejected"; requested_by: User; created_at: string; item: InventoryItem; decision_note: string | null }
+interface PriceRequest { id: number; item_id: number; price_type: "purchase" | "selling"; old_price: string; requested_price: string; reason: string; status: "pending" | "approved" | "rejected" | "cancelled"; requested_by: User; created_at: string; item: InventoryItem; decision_note: string | null }
 interface Movement { id: number; movement_type: string; quantity: string; unit_cost: string | null; quantity_before: string; quantity_after: string; reason: string; created_at: string }
-interface ItemReport { stock_value: string; units_used_90d: string; average_daily_use: string; estimated_days_remaining: string | null; daily_activity: Array<{ date: string; received: string; used: string; waste: string }>; price_history: Array<{ date: string; old_price: string; new_price: string }> }
+interface ItemReport { stock_value: string; units_used_90d: string; average_daily_use: string; estimated_days_remaining: string | null; daily_activity: Array<{ date: string; received: string; used: string; waste: string }>; price_history: Array<{ date: string; price_type: "purchase" | "selling"; old_price: string; new_price: string }> }
 
 export default function InventoryPage() {
   const { user } = useAuth();
@@ -21,11 +21,16 @@ export default function InventoryPage() {
   const [category, setCategory] = useState("");
   const [lowStock, setLowStock] = useState(false);
   const [itemForm, setItemForm] = useState<InventoryItem | "new" | null>(null);
+  const [formUnit, setFormUnit] = useState("عدد");
   const [movementItem, setMovementItem] = useState<InventoryItem | null>(null);
-  const [priceItem, setPriceItem] = useState<InventoryItem | null>(null);
   const [detailItem, setDetailItem] = useState<InventoryItem | null>(null);
   const [categoryModal, setCategoryModal] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (itemForm === "new") setFormUnit("عدد");
+    else if (itemForm) setFormUnit(itemForm.unit);
+  }, [itemForm]);
 
   const params = new URLSearchParams({ page_size: "100", active: "true" });
   if (search) params.set("search", search);
@@ -37,7 +42,7 @@ export default function InventoryPage() {
   const invalidate = () => { client.invalidateQueries({ queryKey: ["inventory"] }); client.invalidateQueries({ queryKey: ["price-requests"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); };
   const mutation = useMutation({
     mutationFn: ({ path, method, body }: { path: string; method: string; body?: object | FormData }) => api(path, { method, body }),
-    onSuccess: () => { invalidate(); setItemForm(null); setMovementItem(null); setPriceItem(null); setError(""); },
+    onSuccess: () => { invalidate(); setItemForm(null); setMovementItem(null); setError(""); },
     onError: (reason) => setError(reason instanceof ApiError ? reason.message : "انجام عملیات ممکن نشد"),
   });
 
@@ -50,8 +55,9 @@ export default function InventoryPage() {
     const body: Record<string, unknown> = {
       sku: form.get("sku"), name: form.get("name"), category_id: form.get("category_id") ? Number(form.get("category_id")) : null,
       unit: form.get("unit"), reorder_level: form.get("reorder_level"), target_stock_level: form.get("target_stock_level"), auto_reorder_enabled: form.get("auto_reorder_enabled") === "on", description: form.get("description") || null,
+      purchase_price: form.get("purchase_price") || 0, selling_price: form.get("selling_price") || 0,
     };
-    if (itemForm === "new") body.selling_price = form.get("selling_price") || 0;
+    if (itemForm !== "new") body.price_change_reason = form.get("price_change_reason") || null;
     mutation.mutate({ path: itemForm === "new" ? "/inventory/items" : `/inventory/items/${itemForm!.id}`, method: itemForm === "new" ? "POST" : "PATCH", body });
   };
 
@@ -62,14 +68,8 @@ export default function InventoryPage() {
     mutation.mutate({ path: `/inventory/items/${movementItem.id}/movements`, method: "POST", body: { movement_type: form.get("movement_type"), quantity: form.get("quantity"), unit_cost: form.get("unit_cost") || null, reason: form.get("reason") } });
   };
 
-  const savePrice = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!priceItem) return;
-    const form = new FormData(event.currentTarget);
-    mutation.mutate({ path: `/inventory/items/${priceItem.id}/price-requests`, method: "POST", body: { requested_price: form.get("requested_price"), reason: form.get("reason") } });
-  };
-
   const decide = (id: number, status: "approved" | "rejected") => mutation.mutate({ path: `/inventory/price-requests/${id}/decision`, method: "POST", body: { status } });
+  const pricingUnit = formUnit.trim() || "واحد پایه";
 
   return (
     <div className="page-stack">
@@ -87,28 +87,36 @@ export default function InventoryPage() {
           {items.isLoading ? <div className="center-loader"><Spinner /></div> : items.data?.items.length ? <div className="inventory-grid">{items.data.items.map((item) => { const isLow = Number(item.current_quantity) <= Number(item.reorder_level); return <article className="inventory-card" key={item.id}>
             <button className="item-image" onClick={() => setDetailItem(item)}>{assetUrl(item.image_path) ? <img src={assetUrl(item.image_path)} alt="" /> : <PackageOpen size={30} />}{isLow && <Badge tone="danger">موجودی کم</Badge>}{item.auto_reorder_enabled && <Badge tone="info">خرید خودکار</Badge>}</button>
             <div className="item-card-body"><div className="item-title"><span style={{ background: item.category?.color || "#94a3b8" }} /><div><h3>{item.name}</h3><small>{item.sku} · {item.category?.name || "بدون دسته‌بندی"}</small></div><button className="icon-button" onClick={() => setDetailItem(item)}><MoreHorizontal size={19} /></button></div>
-            <div className="item-quantities"><span><small>موجودی</small><strong>{quantity(item.current_quantity)} <i>{item.unit}</i></strong></span><span><small>میانگین هزینه</small><strong>{money(item.average_cost)}</strong></span><span><small>قیمت فروش</small><strong>{money(item.selling_price)}</strong></span></div>
-            <div className="item-actions"><button onClick={() => { setError(""); setMovementItem(item); }}><ArrowDownToLine size={16} /> موجودی</button><button onClick={() => { setError(""); setPriceItem(item); }}><CircleDollarSign size={16} /> قیمت</button><button onClick={() => { setError(""); setItemForm(item); }}>ویرایش <ChevronRight size={15} /></button></div></div>
+            <div className="item-quantities"><span><small>موجودی</small><strong>{quantity(item.current_quantity)} <i>{item.unit}</i></strong></span><span><small>خرید هر {item.unit}</small><strong>{money(item.average_cost)}</strong></span><span><small>فروش هر {item.unit}</small><strong>{money(item.selling_price)}</strong></span></div>
+            <div className="item-actions"><button onClick={() => { setError(""); setMovementItem(item); }}><ArrowDownToLine size={16} /> موجودی</button><button onClick={() => { setError(""); setItemForm(item); }}><CircleDollarSign size={16} /> قیمت</button><button onClick={() => { setError(""); setItemForm(item); }}>ویرایش <ChevronRight size={15} /></button></div></div>
           </article>; })}</div> : <EmptyState icon={<PackageOpen />} title="کالایی پیدا نشد" text="اولین کالا را بسازید یا فیلترها را تغییر دهید." />}
         </section>
       </> : <section className="panel approvals-panel">
         <header className="panel-header"><div><h2>کنترل تغییر قیمت</h2><p>هر پیشنهاد مدیر انبار تا زمان تصمیم مدیر کل، دقیق و قابل پیگیری می‌ماند.</p></div></header>
-        {approvals.isLoading ? <div className="center-loader"><Spinner /></div> : approvals.data?.length ? <div className="approval-list">{approvals.data.map((request) => <article key={request.id} className="approval-row"><div className="approval-product"><div className="mini-product">{request.item.image_path ? <img src={assetUrl(request.item.image_path)} alt="" /> : <CircleDollarSign />}</div><div><strong>{request.item.name}</strong><small>{request.item.sku} · درخواست {request.requested_by.full_name}</small></div></div><div className="price-delta"><span><small>قیمت فعلی</small>{money(request.old_price)}</span><ArrowDownToLine size={18} /><span><small>قیمت پیشنهادی</small><strong>{money(request.requested_price)}</strong></span></div><div className="approval-reason"><small>دلیل تغییر</small><span>{request.reason}</span><small>{dateTime(request.created_at)}</small></div><Badge tone={request.status === "approved" ? "success" : request.status === "rejected" ? "danger" : "warning"}>{statusLabel[request.status]}</Badge>{request.status === "pending" && user?.role === "root" && <div className="approval-actions"><button className="approve" title="تأیید" onClick={() => decide(request.id, "approved")}><Check size={17} /></button><button className="reject" title="رد" onClick={() => decide(request.id, "rejected")}><X size={17} /></button></div>}</article>)}</div> : <EmptyState icon={<Check />} title="درخواست قیمتی وجود ندارد" text="در حال حاضر پیشنهاد قیمتی برای بررسی ثبت نشده است." />}
+        {approvals.isLoading ? <div className="center-loader"><Spinner /></div> : approvals.data?.length ? <div className="approval-list">{approvals.data.map((request) => <article key={request.id} className="approval-row"><div className="approval-product"><div className="mini-product">{request.item.image_path ? <img src={assetUrl(request.item.image_path)} alt="" /> : <CircleDollarSign />}</div><div><strong>{request.item.name}</strong><small>{request.price_type === "purchase" ? "قیمت خرید" : "قیمت فروش"} هر {request.item.unit} · درخواست {request.requested_by.full_name}</small></div></div><div className="price-delta"><span><small>قیمت فعلی هر {request.item.unit}</small>{money(request.old_price)}</span><ArrowDownToLine size={18} /><span><small>قیمت پیشنهادی</small><strong>{money(request.requested_price)}</strong></span></div><div className="approval-reason"><small>دلیل تغییر</small><span>{request.reason}</span><small>{dateTime(request.created_at)}</small></div><Badge tone={request.status === "approved" ? "success" : request.status === "rejected" || request.status === "cancelled" ? "danger" : "warning"}>{statusLabel[request.status]}</Badge>{request.status === "pending" && user?.role === "root" && <div className="approval-actions"><button className="approve" title="تأیید" onClick={() => decide(request.id, "approved")}><Check size={17} /></button><button className="reject" title="رد" onClick={() => decide(request.id, "rejected")}><X size={17} /></button></div>}</article>)}</div> : <EmptyState icon={<Check />} title="درخواست قیمتی وجود ندارد" text="در حال حاضر پیشنهاد قیمتی برای بررسی ثبت نشده است." />}
       </section>}
 
-      <Modal open={itemForm !== null} title={itemForm === "new" ? "ایجاد کالای انبار" : "ویرایش کالای انبار"} onClose={() => setItemForm(null)}>
+      <Modal open={itemForm !== null} title={itemForm === "new" ? "ایجاد کالای انبار" : "ویرایش کالای انبار"} onClose={() => setItemForm(null)} wide>
         <form className="form-grid" onSubmit={saveItem}>
           <label className="field"><span>نام کالا</span><input name="name" required defaultValue={itemForm !== "new" && itemForm ? itemForm.name : ""} /></label>
           <label className="field"><span>کد کالا</span><input name="sku" required defaultValue={itemForm !== "new" && itemForm ? itemForm.sku : ""} /></label>
           <label className="field"><span>دسته‌بندی</span><select name="category_id" defaultValue={itemForm !== "new" && itemForm ? itemForm.category_id || "" : ""}><option value="">بدون دسته‌بندی</option>{categories.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label className="field"><span>واحد اندازه‌گیری</span><input name="unit" required defaultValue={itemForm !== "new" && itemForm ? itemForm.unit : "عدد"} placeholder="کیلوگرم، گرم، بطری…" /></label>
+          <label className="field"><span>واحد اندازه‌گیری</span><input name="unit" required value={formUnit} onChange={(event) => setFormUnit(event.target.value)} placeholder="کیلوگرم، گرم، بطری…" /></label>
           <label className="field"><span>نقطه سفارش مجدد</span><input name="reorder_level" type="number" min="0" step="0.001" required defaultValue={itemForm !== "new" && itemForm ? itemForm.reorder_level : "0"} /></label>
           <label className="field"><span>موجودی هدف پس از خرید</span><input name="target_stock_level" type="number" min="0" step="0.001" required defaultValue={itemForm !== "new" && itemForm ? itemForm.target_stock_level : "0"} /><small>برای پیشنهاد مقدار خرید فردا</small></label>
           <label className="field toggle-field field-wide"><input name="auto_reorder_enabled" type="checkbox" defaultChecked={itemForm !== "new" && itemForm ? itemForm.auto_reorder_enabled : false} /><span>ساخت خودکار هشدار و ردیف خرید فردا هنگام رسیدن به حد سفارش</span></label>
-          {itemForm === "new" && <label className="field"><span>قیمت فروش اولیه</span><input name="selling_price" type="number" min="0" step="0.01" defaultValue="0" /><small>{user?.role === "storage_manager" ? "نیازمند تأیید مدیر کل" : "بلافاصله اعمال می‌شود"}</small></label>}
+          <section className="pricing-editor field-wide">
+            <header><div><span className="pricing-kicker">قیمت‌گذاری واحد پایه</span><h3>قیمت خرید و فروش</h3><p>تمام قیمت‌ها به تومان و برای هر «{pricingUnit}» ثبت می‌شوند.</p></div><span className="unit-pill">هر {pricingUnit}</span></header>
+            <div className="pricing-fields">
+              <label className="field"><span>قیمت خرید هر {pricingUnit}</span><input name="purchase_price" type="number" min="0" step="0.01" required defaultValue={itemForm !== "new" && itemForm ? itemForm.average_cost : "0"} /><small>مبنای ارزش فعلی انبار و بهای تمام‌شده سفارش‌های بعدی</small></label>
+              <label className="field"><span>قیمت فروش هر {pricingUnit}</span><input name="selling_price" type="number" min="0" step="0.01" required defaultValue={itemForm !== "new" && itemForm ? itemForm.selling_price : "0"} /><small>قیمت فروش مستقیم همین واحد از کالا</small></label>
+              {itemForm !== "new" && <label className="field field-wide"><span>دلیل تغییر قیمت <small>{user?.role === "root" ? "(اختیاری)" : "(برای تأیید مدیر کل الزامی)"}</small></span><textarea name="price_change_reason" rows={2} placeholder="مثلاً تغییر قیمت تأمین‌کننده یا اصلاح قیمت‌گذاری" /></label>}
+            </div>
+            <div className="pricing-note"><CircleDollarSign size={18} /><span>{user?.role === "storage_manager" ? "اطلاعات کالا فوراً ذخیره می‌شود؛ تغییر قیمت خرید و فروش پس از تأیید مدیر کل اعمال خواهد شد." : "تغییر قیمت خرید، موجودی فعلی را ارزش‌گذاری مجدد می‌کند و روی سفارش‌های آینده اثر می‌گذارد؛ سوابق گذشته تغییر نمی‌کنند."}</span></div>
+          </section>
           <label className="field field-wide"><span>توضیحات</span><textarea name="description" rows={3} defaultValue={itemForm !== "new" && itemForm ? itemForm.description || "" : ""} /></label>
           {error && <div className="form-error field-wide">{error}</div>}
-          <div className="form-actions field-wide"><Button type="button" variant="secondary" onClick={() => setItemForm(null)}>انصراف</Button><Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "در حال ذخیره…" : "ذخیره کالا"}</Button></div>
+          <div className="form-actions field-wide"><Button type="button" variant="secondary" onClick={() => setItemForm(null)}>انصراف</Button><Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "در حال ذخیره…" : user?.role === "storage_manager" && itemForm !== "new" ? "ذخیره و ارسال قیمت‌ها" : "ذخیره کالا"}</Button></div>
         </form>
       </Modal>
 
@@ -122,10 +130,6 @@ export default function InventoryPage() {
           {error && <div className="form-error field-wide">{error}</div>}
           <div className="form-actions field-wide"><Button type="button" variant="secondary" onClick={() => setMovementItem(null)}>انصراف</Button><Button type="submit" disabled={mutation.isPending}>ثبت گردش</Button></div>
         </form>}
-      </Modal>
-
-      <Modal open={!!priceItem} title={`تغییر قیمت · ${priceItem?.name || ""}`} onClose={() => setPriceItem(null)}>
-        {priceItem && <form className="form-grid" onSubmit={savePrice}><div className="current-stock field-wide"><span>قیمت فروش فعلی</span><strong>{money(priceItem.selling_price)}</strong></div><label className="field field-wide"><span>قیمت فروش جدید</span><input name="requested_price" type="number" min="0" step="0.01" required autoFocus /></label><label className="field field-wide"><span>دلیل تغییر قیمت</span><textarea name="reason" minLength={3} required rows={3} /></label>{user?.role === "storage_manager" && <div className="info-callout field-wide">این قیمت تا زمان تأیید مدیر کل در حالت انتظار باقی می‌ماند.</div>}{error && <div className="form-error field-wide">{error}</div>}<div className="form-actions field-wide"><Button type="button" variant="secondary" onClick={() => setPriceItem(null)}>انصراف</Button><Button type="submit" disabled={mutation.isPending}>{user?.role === "root" ? "اعمال قیمت" : "ارسال برای تأیید"}</Button></div></form>}
       </Modal>
 
       <ItemDetail item={detailItem} close={() => setDetailItem(null)} edit={() => { setItemForm(detailItem); setDetailItem(null); }} onUploaded={() => { invalidate(); }} />
