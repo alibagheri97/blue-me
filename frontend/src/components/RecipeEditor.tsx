@@ -1,7 +1,12 @@
 import { Calculator, Plus, Scale, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { money, quantity } from "../lib/format";
-import type { InventoryItem, MenuItem, Recipe, RecipeIngredient } from "../types";
+import type {
+  KitchenInventoryItem,
+  KitchenMenuItem,
+  Recipe,
+  RecipeIngredient,
+} from "../types";
 import { Badge, Button, Modal } from "./ui";
 
 interface RecipeEditorProps {
@@ -10,8 +15,8 @@ interface RecipeEditorProps {
   initialMenuItemId?: number | null;
   lockMenuItem?: boolean;
   close: () => void;
-  menu: MenuItem[];
-  inventory: InventoryItem[];
+  menu: KitchenMenuItem[];
+  inventory: KitchenInventoryItem[];
   save: (body: object, id?: number) => void;
   pending: boolean;
   error: string;
@@ -69,7 +74,7 @@ export function RecipeEditor({
 
   if (!open) return null;
 
-  const addIngredient = (item: InventoryItem) => {
+  const addIngredient = (item: KitchenInventoryItem) => {
     setIngredients((current) => [...current, {
       inventory_item_id: item.id,
       quantity: "",
@@ -111,7 +116,7 @@ export function RecipeEditor({
           <div><h3>فرمول خروجی منو</h3><p>سیستم مقدار مصرف هر سفارش را از روی این فرمول محاسبه و همان لحظه از انبار کم می‌کند.</p></div>
         </div>
         <div className="form-grid">
-          <label className="field field-wide"><span>محصول منو</span><select value={menuItemId} onChange={(event) => setMenuItemId(event.target.value)} disabled={lockMenuItem || !!recipe} required><option value="" disabled>انتخاب محصول</option>{eligibleMenu.map((item) => <option key={item.id} value={item.id}>{item.name} · فروش {money(item.selling_price)}</option>)}</select></label>
+          <label className="field field-wide"><span>محصول منو</span><select value={menuItemId} onChange={(event) => setMenuItemId(event.target.value)} disabled={lockMenuItem || !!recipe} required><option value="" disabled>انتخاب محصول</option>{eligibleMenu.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.category}</option>)}</select></label>
           <label className="field"><span>این دستور برای چند عدد خروجی است؟</span><input value={yieldQuantity} onChange={(event) => setYieldQuantity(event.target.value)} type="number" min="0.001" step="0.001" required /></label>
           <label className="field"><span>زمان آماده‌سازی</span><div className="input-with-suffix"><input name="preparation_minutes" type="number" min="0" defaultValue={recipe?.preparation_minutes || 0} /><small>دقیقه</small></div></label>
         </div>

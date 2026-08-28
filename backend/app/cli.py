@@ -563,6 +563,12 @@ def seed_catalog_data(
                 name=name,
                 category_id=categories[category_name].id,
                 unit=unit,
+                purchase_quantity=Decimal("1"),
+                purchase_unit=unit,
+                purchase_total_price=Decimal("0"),
+                selling_quantity=Decimal("1"),
+                selling_unit=unit,
+                selling_total_price=Decimal("0"),
             )
             db.add(item)
             db.flush()
@@ -702,7 +708,7 @@ def seed_catalog(*, dry_run: bool = False, force: bool = False) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Blue Me management commands")
+    parser = argparse.ArgumentParser(description="Shaverma-chi management commands")
     parser.add_argument(
         "command", choices=["bootstrap", "seed-catalog"], help="Command to run"
     )

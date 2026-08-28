@@ -29,7 +29,7 @@ export default function LoginPage() {
       <section className="login-showcase">
         <div className="showcase-brand">
           <div className="brand-logo brand-logo-large">
-            {brand.logo_url ? <img src={brand.logo_url} alt="" /> : <span>B</span>}
+            {brand.logo_url ? <img src={brand.logo_url} alt="" /> : <span>{brand.business_name.trim().charAt(0) || "ش"}</span>}
           </div>
           <span>{brand.app_name}</span>
         </div>

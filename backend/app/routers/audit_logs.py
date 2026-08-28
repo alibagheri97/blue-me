@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_, select
@@ -8,6 +8,7 @@ from app.db import get_db
 from app.deps import require_roles
 from app.models import AuditLog, User, UserRole
 from app.schemas import AuditPage
+from app.services.business_time import day_bounds
 
 router = APIRouter(prefix="/audit-logs", tags=["audit"])
 root_only = require_roles(UserRole.ROOT)
@@ -33,11 +34,8 @@ def list_audit_logs(
     if action:
         filters.append(AuditLog.action == action)
     if day:
-        filters.append(
-            AuditLog.created_at.between(
-                datetime.combine(day, time.min), datetime.combine(day, time.max)
-            )
-        )
+        start, end = day_bounds(day)
+        filters.append(AuditLog.created_at.between(start, end))
     if search:
         term = f"%{search.strip()}%"
         filters.append(

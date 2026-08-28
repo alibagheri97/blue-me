@@ -8,6 +8,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.db import engine
 from app.routers import (
+    attendance,
     audit_logs,
     auth,
     config,
@@ -17,6 +18,8 @@ from app.routers import (
     orders,
     purchases,
     reports,
+    settings as system_settings,
+    staff,
     users,
 )
 
@@ -42,12 +45,15 @@ app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
 
 app.include_router(config.router)
 app.include_router(auth.router)
+app.include_router(attendance.router)
 app.include_router(users.router)
 app.include_router(inventory.router)
 app.include_router(purchases.router)
 app.include_router(orders.router)
+app.include_router(staff.router)
 app.include_router(kitchen.router)
 app.include_router(reports.router)
+app.include_router(system_settings.router)
 app.include_router(audit_logs.router)
 app.include_router(notifications.router)
 

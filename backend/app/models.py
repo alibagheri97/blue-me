@@ -103,6 +103,20 @@ class User(TimestampMixin, Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, native_enum=False), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    staff_profile: Mapped[StaffMember | None] = relationship(
+        back_populates="user", uselist=False
+    )
+
+
+class SystemSetting(TimestampMixin, Base):
+    __tablename__ = "system_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    kitchen_workflow_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    updated_by: Mapped[User | None] = relationship()
 
 
 class Category(TimestampMixin, Base):
@@ -136,6 +150,16 @@ class InventoryItem(TimestampMixin, Base):
     average_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     last_purchase_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     selling_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    purchase_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 3), default=Decimal("1")
+    )
+    purchase_unit: Mapped[str] = mapped_column(String(32), default="عدد")
+    purchase_total_price: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    selling_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(14, 3), default=Decimal("1")
+    )
+    selling_unit: Mapped[str] = mapped_column(String(32), default="عدد")
+    selling_total_price: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
     image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -230,6 +254,9 @@ class PriceChangeRequest(Base):
     )
     old_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     requested_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    package_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), nullable=True)
+    package_unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    package_total_price: Mapped[Decimal | None] = mapped_column(Numeric(16, 2), nullable=True)
     reason: Mapped[str] = mapped_column(String(500))
     status: Mapped[ApprovalStatus] = mapped_column(
         Enum(ApprovalStatus, native_enum=False, length=20),
@@ -252,6 +279,61 @@ class Customer(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(160), index=True)
     phone: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class StaffMember(TimestampMixin, Base):
+    __tablename__ = "staff_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    phone: Mapped[str | None] = mapped_column(
+        String(32), unique=True, nullable=True, index=True
+    )
+    position: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), unique=True, nullable=True, index=True
+    )
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    user: Mapped[User | None] = relationship(back_populates="staff_profile")
+    orders: Mapped[list[Order]] = relationship(back_populates="staff_member")
+    attendance_records: Mapped[list[AttendanceRecord]] = relationship(
+        back_populates="staff_member", cascade="all, delete-orphan"
+    )
+
+
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_records"
+    __table_args__ = (
+        Index("ix_attendance_staff_check_in", "staff_member_id", "checked_in_at"),
+        Index("ix_attendance_open_shift", "staff_member_id", "checked_out_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_member_id: Mapped[int] = mapped_column(
+        ForeignKey("staff_members.id"), index=True
+    )
+    checked_in_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    checked_out_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    checked_in_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    checked_out_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )
+    check_in_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    check_out_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+    staff_member: Mapped[StaffMember] = relationship(
+        back_populates="attendance_records"
+    )
+    checked_in_by: Mapped[User] = relationship(foreign_keys=[checked_in_by_id])
+    checked_out_by: Mapped[User | None] = relationship(
+        foreign_keys=[checked_out_by_id]
+    )
 
 
 class MenuCategory(TimestampMixin, Base):
@@ -327,6 +409,11 @@ class Order(Base):
     )
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True)
     customer_name: Mapped[str] = mapped_column(String(160), default="Guest")
+    staff_member_id: Mapped[int | None] = mapped_column(
+        ForeignKey("staff_members.id"), nullable=True, index=True
+    )
+    staff_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    is_staff_meal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     discount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     total: Mapped[Decimal] = mapped_column(Numeric(14, 2))
@@ -336,6 +423,7 @@ class Order(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     customer: Mapped[Customer | None] = relationship()
+    staff_member: Mapped[StaffMember | None] = relationship(back_populates="orders")
     items: Mapped[list[OrderItem]] = relationship(back_populates="order", cascade="all, delete-orphan")
 
 

@@ -11,13 +11,13 @@ interface AuthValue {
 }
 
 const fallbackBrand: BrandConfig = {
-  app_name: "Blue Me",
-  business_name: "Blue Me",
+  app_name: "Shaverma-chi",
+  business_name: "شاورماچی",
   tagline: "مدیریت شفاف، تصمیم‌گیری هوشمند",
   primary_color: "#2563eb",
   logo_url: null,
-  locale: "en",
-  timezone: "UTC",
+  locale: "fa",
+  timezone: "Asia/Tehran",
   currency_label: "تومان",
 };
 
@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api<BrandConfig>("/public/config")
       .then((config) => {
         setBrand(config);
-        document.title = config.business_name;
+        document.title = `${config.app_name} | ${config.business_name}`;
         document.documentElement.style.setProperty("--brand", config.primary_color);
         document.documentElement.dir = ["fa", "ar", "he"].includes(config.locale) ? "rtl" : "ltr";
       })

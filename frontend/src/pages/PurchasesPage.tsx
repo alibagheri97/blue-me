@@ -22,7 +22,8 @@ import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Badge, Button, EmptyState, Modal, Spinner } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, api, assetUrl } from "../lib/api";
-import { dateTime, money, quantity } from "../lib/format";
+import { businessDate, dateOnly, dateTime, money, quantity } from "../lib/format";
+import { stockAmount, unitChoices, unitFactor } from "../lib/units";
 import type { Category, InventoryItem, PurchaseReceipt } from "../types";
 
 interface DraftLine {
@@ -37,26 +38,11 @@ interface DraftLine {
 const lineForItem = (item: InventoryItem): DraftLine => ({
   key: item.id,
   inventory_item_id: String(item.id),
-  quantity: "1",
-  purchase_unit: item.unit,
-  conversion_factor: "1",
-  line_total: "",
+  quantity: item.purchase_quantity || "1",
+  purchase_unit: item.purchase_unit || item.unit,
+  conversion_factor: String(unitFactor(item.unit, item.purchase_unit || item.unit) || 1),
+  line_total: Number(item.purchase_total_price || 0) > 0 ? item.purchase_total_price : "",
 });
-
-const today = () => new Date().toISOString().slice(0, 10);
-
-function unitChoices(stockUnit?: string) {
-  if (stockUnit === "گرم") return ["گرم", "کیلوگرم"];
-  if (stockUnit === "میلی‌لیتر") return ["میلی‌لیتر", "لیتر"];
-  if (stockUnit === "عدد") return ["عدد", "بسته", "کارتن"];
-  return [stockUnit || "عدد", "بسته"];
-}
-
-function suggestedFactor(stockUnit: string | undefined, purchaseUnit: string) {
-  if (stockUnit === "گرم" && purchaseUnit === "کیلوگرم") return "1000";
-  if (stockUnit === "میلی‌لیتر" && purchaseUnit === "لیتر") return "1000";
-  return "1";
-}
 
 export default function PurchasesPage() {
   const { user } = useAuth();
@@ -72,6 +58,9 @@ export default function PurchasesPage() {
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [discount, setDiscount] = useState("0");
   const [extraCost, setExtraCost] = useState("0");
+  const [quickUnit, setQuickUnit] = useState("عدد");
+  const [quickPurchaseUnit, setQuickPurchaseUnit] = useState("عدد");
+  const [quickSellingUnit, setQuickSellingUnit] = useState("عدد");
 
   const inventory = useQuery({
     queryKey: ["inventory", "purchase-picker"],
@@ -162,7 +151,7 @@ export default function PurchasesPage() {
   };
   const selectPurchaseUnit = (line: DraftLine, value: string) => {
     const item = inventory.data?.items.find((candidate) => candidate.id === Number(line.inventory_item_id));
-    updateLine(line.key, { purchase_unit: value, conversion_factor: suggestedFactor(item?.unit, value) });
+    updateLine(line.key, { purchase_unit: value, conversion_factor: String(unitFactor(item?.unit, value) || 1) });
   };
   const submitReceipt = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -172,7 +161,7 @@ export default function PurchasesPage() {
       return;
     }
     if (lines.some((line) => Number(line.quantity) <= 0 || Number(line.conversion_factor) <= 0 || line.line_total === "" || Number(line.line_total) < 0)) {
-      setError("مقدار، ضریب تبدیل و مبلغ همه کالاهای انتخاب‌شده را کامل کنید");
+      setError("مقدار، واحد و مبلغ همه کالاهای انتخاب‌شده را کامل کنید");
       return;
     }
     createReceipt.mutate({
@@ -202,7 +191,12 @@ export default function PurchasesPage() {
       reorder_level: 0,
       target_stock_level: 0,
       auto_reorder_enabled: false,
-      selling_price: 0,
+      purchase_quantity: form.get("purchase_quantity"),
+      purchase_unit: form.get("purchase_unit"),
+      purchase_price: form.get("purchase_price") || 0,
+      selling_quantity: form.get("selling_quantity"),
+      selling_unit: form.get("selling_unit"),
+      selling_price: form.get("selling_price") || 0,
     });
   };
 
@@ -227,7 +221,7 @@ export default function PurchasesPage() {
         </header>
 
         <div className="purchase-meta-strip">
-          <label className="field"><span>تاریخ خرید</span><input name="purchased_at" type="date" defaultValue={today()} required /></label>
+          <label className="field"><span>تاریخ خرید</span><input name="purchased_at" type="date" defaultValue={businessDate()} required /></label>
           <label className="field"><span>فروشنده</span><input name="supplier_name" placeholder="مثلاً پخش مرکزی" /></label>
           <label className="field"><span>شماره فاکتور</span><input name="invoice_number" placeholder="اختیاری" /></label>
         </div>
@@ -262,7 +256,7 @@ export default function PurchasesPage() {
               </span>
               <span className="purchase-product-stats">
                 <span><small>موجودی فعلی</small><b>{quantity(item.current_quantity)} {item.unit}</b></span>
-                <span><small>آخرین بها</small><b>{money(item.last_purchase_price)}</b></span>
+                <span><small>آخرین خرید</small><b>{quantity(item.purchase_quantity)} {item.purchase_unit} · {money(item.purchase_total_price)}</b></span>
               </span>
               <span className="purchase-click-hint">{selected ? `${quantity(selected.quantity)} ${selected.purchase_unit} در سبد · کلیک برای +۱` : "کلیک برای افزودن"}</span>
             </button>;
@@ -279,7 +273,7 @@ export default function PurchasesPage() {
         <div className="purchase-cart-scroll">
         {lines.length ? <div className="purchase-cart-lines">{lines.map((line, index) => {
           const item = inventory.data?.items.find((candidate) => candidate.id === Number(line.inventory_item_id));
-          const stockAdded = Number(line.quantity || 0) * Number(line.conversion_factor || 0);
+          const stockAdded = stockAmount(line.quantity, line.purchase_unit, item?.unit) || Number(line.quantity || 0) * Number(line.conversion_factor || 0);
           const unitCost = stockAdded > 0 ? Number(line.line_total || 0) / stockAdded : 0;
           return <article className="purchase-cart-line" key={line.key}>
             <header>
@@ -289,9 +283,8 @@ export default function PurchasesPage() {
             </header>
             <div className="purchase-cart-controls">
               <label className="cart-quantity-field"><span>مقدار خرید</span><div><button type="button" onClick={() => adjustQuantity(line, -1)}><Minus /></button><input value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: event.target.value })} type="number" min="0.001" step="0.001" required /><button type="button" onClick={() => adjustQuantity(line, 1)}><Plus /></button></div></label>
-              <label><span>واحد خرید</span><select value={line.purchase_unit} onChange={(event) => selectPurchaseUnit(line, event.target.value)}>{unitChoices(item?.unit).map((unit) => <option key={unit}>{unit}</option>)}</select></label>
-              <label><span>ضریب تبدیل</span><input value={line.conversion_factor} onChange={(event) => updateLine(line.key, { conversion_factor: event.target.value })} type="number" min="0.001" step="0.001" required /></label>
-              <label className="cart-line-price"><span>جمع قیمت این کالا</span><div><input value={line.line_total} onChange={(event) => updateLine(line.key, { line_total: event.target.value })} type="number" min="0" step="1" placeholder="مثلاً ۱۵۵۰۰۰" required /><small>تومان</small></div></label>
+              <label><span>واحد</span><select value={line.purchase_unit} onChange={(event) => selectPurchaseUnit(line, event.target.value)}>{Array.from(new Set([...unitChoices(item?.unit), line.purchase_unit])).map((unit) => <option key={unit}>{unit}</option>)}</select></label>
+              <label className="cart-line-price"><span>مبلغ کل خرید</span><div><input value={line.line_total} onChange={(event) => updateLine(line.key, { line_total: event.target.value })} type="number" min="0" step="1" placeholder="مثلاً ۱۵۵۰۰۰" required /><small>تومان</small></div></label>
             </div>
             <footer><span><ArrowDownToLine /> ورود به انبار: <b>{quantity(stockAdded)} {item?.unit}</b></span>{unitCost > 0 && <span>بهای هر {item?.unit}: <b>{money(unitCost)}</b></span>}</footer>
           </article>;
@@ -325,19 +318,20 @@ export default function PurchasesPage() {
       <header className="panel-header"><div><h2>دفتر ورود کالا</h2><p>هر فاکتور، ردیف‌های خرید، بهای نهایی و کاربر ثبت‌کننده قابل پیگیری است.</p></div><label className="search-box"><Search size={17} /><input value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="شماره فاکتور، فروشنده یا مرجع…" /></label></header>
       {purchases.isLoading ? <div className="center-loader"><Spinner /></div> : shownReceipts.length ? <div className="purchase-list">{shownReceipts.map((receipt) => <button key={receipt.id} onClick={() => { setError(""); setActiveReceipt(receipt); }} className={receipt.status === "voided" ? "voided" : ""}>
         <span className="purchase-icon"><FileText /></span><span className="purchase-main"><strong>{receipt.receipt_number}</strong><small>{receipt.supplier_name || "فروشنده ثبت نشده"} · {receipt.invoice_number ? `فاکتور ${receipt.invoice_number}` : "بدون شماره مرجع"}</small></span>
-        <span><small>تاریخ خرید</small><strong>{new Date(receipt.purchased_at).toLocaleDateString("fa-IR")}</strong></span><span><small>اقلام</small><strong>{quantity(receipt.lines.length)} ردیف</strong></span><span><small>مبلغ نهایی</small><strong>{money(receipt.total_cost)}</strong></span><Badge tone={receipt.status === "posted" ? "success" : "danger"}>{receipt.status === "posted" ? "ثبت قطعی" : "باطل‌شده"}</Badge>
+        <span><small>تاریخ خرید</small><strong>{dateOnly(receipt.purchased_at)}</strong></span><span><small>اقلام</small><strong>{quantity(receipt.lines.length)} ردیف</strong></span><span><small>مبلغ نهایی</small><strong>{money(receipt.total_cost)}</strong></span><Badge tone={receipt.status === "posted" ? "success" : "danger"}>{receipt.status === "posted" ? "ثبت قطعی" : "باطل‌شده"}</Badge>
       </button>)}</div> : <EmptyState icon={<Truck />} title="هنوز ورودی کالایی ثبت نشده" text="اولین خرید را از شبکه بالا ثبت کنید تا موجودی و بهای تمام‌شده خودکار به‌روز شود." />}
     </section>
 
-    <Modal open={quickItemOpen} title="ساخت سریع کالای انبار" onClose={() => setQuickItemOpen(false)}><form className="form-grid" onSubmit={submitQuickItem}>
+    <Modal open={quickItemOpen} title="ساخت سریع کالای انبار" onClose={() => setQuickItemOpen(false)} wide><form className="form-grid" onSubmit={submitQuickItem}>
       <label className="field"><span>نام کالا</span><input name="name" required autoFocus /></label><label className="field"><span>کد کالا <small>(اختیاری)</small></span><input name="sku" placeholder="خودکار ساخته می‌شود" /></label>
       <label className="field"><span>دسته‌بندی</span><select name="category_id"><option value="">بدون دسته‌بندی</option>{categories.data?.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
-      <label className="field"><span>واحد اصلی انبار</span><select name="unit" defaultValue="عدد"><option>عدد</option><option>گرم</option><option>میلی‌لیتر</option><option>بسته</option></select></label>
+      <label className="field"><span>واحد پایه موجودی</span><select name="unit" value={quickUnit} onChange={(event) => { const next = event.target.value; setQuickUnit(next); setQuickPurchaseUnit(next); setQuickSellingUnit(next); }}><option>عدد</option><option>گرم</option><option>میلی‌لیتر</option></select></label>
+      <section className="quick-item-pricing field-wide"><article><strong>روش معمول خرید</strong><div><input aria-label="مقدار خرید" name="purchase_quantity" type="number" min="0.001" step="0.001" defaultValue="1" required /><select aria-label="واحد خرید" name="purchase_unit" value={quickPurchaseUnit} onChange={(event) => setQuickPurchaseUnit(event.target.value)}>{unitChoices(quickUnit).map((unit) => <option key={unit}>{unit}</option>)}</select><span>با مبلغ</span><input aria-label="مبلغ خرید" name="purchase_price" type="number" min="0" step="1" defaultValue="0" required /><b>تومان</b></div></article><article><strong>روش فروش</strong><div><input aria-label="مقدار فروش" name="selling_quantity" type="number" min="0.001" step="0.001" defaultValue="1" required /><select aria-label="واحد فروش" name="selling_unit" value={quickSellingUnit} onChange={(event) => setQuickSellingUnit(event.target.value)}>{unitChoices(quickUnit).map((unit) => <option key={unit}>{unit}</option>)}</select><span>با مبلغ</span><input aria-label="مبلغ فروش" name="selling_price" type="number" min="0" step="1" defaultValue="0" required /><b>تومان</b></div></article></section>
       {error && <div className="form-error field-wide">{error}</div>}<div className="form-actions field-wide"><Button type="button" variant="secondary" onClick={() => setQuickItemOpen(false)}>انصراف</Button><Button type="submit" disabled={createItem.isPending}>ساخت و افزودن به سبد</Button></div>
     </form></Modal>
 
     <Modal open={!!activeReceipt} title={activeReceipt?.receipt_number || "جزئیات فاکتور"} onClose={() => { setActiveReceipt(null); setVoiding(false); }} wide>{activeReceipt && <div className="receipt-detail">
-      <div className="receipt-detail-head"><span><Store /><div><small>فروشنده</small><strong>{activeReceipt.supplier_name || "ثبت نشده"}</strong></div></span><span><CalendarDays /><div><small>تاریخ خرید</small><strong>{new Date(activeReceipt.purchased_at).toLocaleDateString("fa-IR")}</strong></div></span><span><FileText /><div><small>مرجع فروشنده</small><strong>{activeReceipt.invoice_number || "—"}</strong></div></span><Badge tone={activeReceipt.status === "posted" ? "success" : "danger"}>{activeReceipt.status === "posted" ? "ثبت قطعی" : "باطل‌شده"}</Badge></div>
+      <div className="receipt-detail-head"><span><Store /><div><small>فروشنده</small><strong>{activeReceipt.supplier_name || "ثبت نشده"}</strong></div></span><span><CalendarDays /><div><small>تاریخ خرید</small><strong>{dateOnly(activeReceipt.purchased_at)}</strong></div></span><span><FileText /><div><small>مرجع فروشنده</small><strong>{activeReceipt.invoice_number || "—"}</strong></div></span><Badge tone={activeReceipt.status === "posted" ? "success" : "danger"}>{activeReceipt.status === "posted" ? "ثبت قطعی" : "باطل‌شده"}</Badge></div>
       <div className="receipt-lines-table"><div className="receipt-table-head"><span>کالا</span><span>خرید</span><span>ورود انبار</span><span>مبلغ ردیف</span><span>سهم هزینه</span><span>بهای هر واحد</span></div>{activeReceipt.lines.map((line) => <div key={line.id}><strong>{line.item_name}</strong><span>{quantity(line.quantity)} {line.purchase_unit}</span><span>{quantity(line.stock_quantity)} {line.stock_unit}</span><span>{money(line.line_total)}</span><span>{Number(line.allocated_cost) >= 0 ? "+" : ""}{money(line.allocated_cost)}</span><span>{money(line.unit_cost)}</span></div>)}</div>
       <div className="receipt-detail-total"><span>جمع اقلام <b>{money(activeReceipt.subtotal)}</b></span><span>هزینه جانبی <b>{money(activeReceipt.extra_cost)}</b></span><span>تخفیف <b>{money(activeReceipt.discount)}</b></span><span>بهای نهایی <strong>{money(activeReceipt.total_cost)}</strong></span></div>
       <p className="receipt-meta">ثبت توسط {activeReceipt.created_by.full_name} در {dateTime(activeReceipt.created_at)}{activeReceipt.notes ? ` · ${activeReceipt.notes}` : ""}</p>

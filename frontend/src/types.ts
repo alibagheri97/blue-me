@@ -15,6 +15,62 @@ export interface User {
   created_at?: string;
 }
 
+export interface StaffMember {
+  id: number;
+  name: string;
+  phone: string | null;
+  position: string | null;
+  user_id: number | null;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  user: User | null;
+  is_current_user: boolean;
+  meal_count: number;
+  menu_value: string;
+  estimated_cost: string;
+  last_meal_at: string | null;
+}
+
+export interface AttendanceStaff {
+  id: number;
+  name: string;
+  position: string | null;
+  user_id: number | null;
+}
+
+export interface AttendanceRecord {
+  id: number;
+  staff_member_id: number;
+  checked_in_by_id: number;
+  checked_out_by_id: number | null;
+  checked_in_at: string;
+  checked_out_at: string | null;
+  duration_minutes: number;
+  is_open: boolean;
+  staff_member: AttendanceStaff;
+}
+
+export interface AttendanceStatus {
+  eligible: boolean;
+  is_checked_in: boolean;
+  staff_member: AttendanceStaff | null;
+  current_session: AttendanceRecord | null;
+  last_session: AttendanceRecord | null;
+  worked_minutes_today: number;
+}
+
+export interface AttendanceOverview {
+  date_from: string;
+  date_to: string;
+  present_count: number;
+  check_ins_today: number;
+  completed_today: number;
+  worked_minutes_today: number;
+  items: AttendanceRecord[];
+}
+
 export interface BrandConfig {
   app_name: string;
   business_name: string;
@@ -24,6 +80,11 @@ export interface BrandConfig {
   locale: string;
   timezone: string;
   currency_label: string;
+}
+
+export interface SystemSettings {
+  kitchen_workflow_enabled: boolean;
+  updated_at: string;
 }
 
 export interface Category {
@@ -47,12 +108,33 @@ export interface InventoryItem {
   average_cost: string;
   last_purchase_price: string;
   selling_price: string;
+  purchase_quantity: string;
+  purchase_unit: string;
+  purchase_total_price: string;
+  selling_quantity: string;
+  selling_unit: string;
+  selling_total_price: string;
   image_path: string | null;
   description: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
+
+export type KitchenInventoryItem = Pick<
+  InventoryItem,
+  | "id"
+  | "sku"
+  | "name"
+  | "category_id"
+  | "category"
+  | "unit"
+  | "current_quantity"
+  | "average_cost"
+  | "image_path"
+  | "description"
+  | "is_active"
+>;
 
 export interface MenuItem {
   id: number;
@@ -73,12 +155,25 @@ export interface MenuItem {
   max_available_quantity: number | null;
 }
 
+export type KitchenMenuItem = Pick<
+  MenuItem,
+  | "id"
+  | "name"
+  | "category"
+  | "category_id"
+  | "inventory_item_id"
+  | "description"
+  | "image_path"
+  | "is_active"
+  | "recipe_configured"
+>;
+
 export interface RecipeIngredient {
   id?: number;
   inventory_item_id: number;
   quantity: string;
   unit: string;
-  inventory_item?: InventoryItem;
+  inventory_item?: KitchenInventoryItem;
 }
 
 export interface Recipe {
@@ -88,10 +183,9 @@ export interface Recipe {
   preparation_minutes: number;
   instructions: string;
   notes: string | null;
-  menu_item: MenuItem;
+  menu_item: KitchenMenuItem;
   ingredients: RecipeIngredient[];
   calculated_cost: string;
-  food_cost_percent: string;
 }
 
 export interface MenuCategory {
@@ -168,6 +262,9 @@ export interface Order {
   status: "confirmed" | "preparing" | "ready" | "completed" | "cancelled";
   customer_id: number | null;
   customer_name: string;
+  staff_member_id: number | null;
+  staff_name: string | null;
+  is_staff_meal: boolean;
   subtotal: string;
   discount: string;
   total: string;
@@ -175,5 +272,28 @@ export interface Order {
   notes: string | null;
   created_by_id: number;
   created_at: string;
+  updated_at: string;
   items: OrderItem[];
+}
+
+export interface KitchenOrderItem {
+  id: number;
+  menu_item_id: number;
+  name: string;
+  quantity: number;
+  notes: string | null;
+}
+
+export interface KitchenOrder {
+  id: number;
+  order_number: string;
+  status: "confirmed" | "preparing" | "ready" | "completed" | "cancelled";
+  customer_name: string;
+  staff_member_id: number | null;
+  staff_name: string | null;
+  is_staff_meal: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  items: KitchenOrderItem[];
 }

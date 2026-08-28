@@ -1,15 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChefHat, ClipboardCheck, Minus, Plus, Printer, ReceiptText, Search, Settings2, ShoppingBag, Trash2, UserPlus, Users, X } from "lucide-react";
-import { useState } from "react";
+import { BadgeCheck, Check, ChefHat, CircleCheckBig, ClipboardCheck, ContactRound, Minus, Pencil, Plus, Printer, ReceiptText, Save, Search, Settings2, ShoppingBag, Trash2, UserPlus, Users, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Badge, Button, EmptyState, Modal, Spinner } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, api, assetUrl } from "../lib/api";
-import { dateTime, money, quantity, statusLabel } from "../lib/format";
-import type { MenuItem, Order } from "../types";
+import { businessDate, dateTime, money, quantity, roleLabel, statusLabel } from "../lib/format";
+import type { MenuItem, Order, StaffMember } from "../types";
 
 interface Customer { id: number; name: string; phone: string; notes: string | null }
 interface CartLine { item: MenuItem; quantity: number; notes: string }
+interface EditableOrderLine { menu_item_id: number; name: string; unit_price: number; quantity: number; notes: string }
 interface ReceiptPrintProfile {
   title: string;
   paper_width_mm: number;
@@ -26,6 +27,10 @@ interface ReceiptDocument {
 }
 interface ReceiptState { document: ReceiptDocument; mode: "customer" | "kitchen" }
 
+function staffPosition(member: StaffMember) {
+  return member.position || (member.user ? roleLabel[member.user.role] : "پرسنل");
+}
+
 export default function PosPage() {
   const { user, brand } = useAuth();
   const navigate = useNavigate();
@@ -33,15 +38,24 @@ export default function PosPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("همه");
   const [cart, setCart] = useState<Record<number, CartLine>>({});
-  const [customerMode, setCustomerMode] = useState<"guest" | "existing" | "new">("guest");
+  const [customerMode, setCustomerMode] = useState<"guest" | "existing" | "staff" | "new">("guest");
   const [customerSearch, setCustomerSearch] = useState("");
   const [customer, setCustomer] = useState<Customer | null>(null);
+  const [staffSearch, setStaffSearch] = useState("");
+  const [staffMember, setStaffMember] = useState<StaffMember | null>(null);
   const [discount, setDiscount] = useState("0");
   const [payment, setPayment] = useState("card");
   const [orderNotes, setOrderNotes] = useState("");
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
+  const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
+  const [quickReceipt, setQuickReceipt] = useState<ReceiptState | null>(null);
+  const [printingMode, setPrintingMode] = useState<"customer" | "kitchen" | null>(null);
+  const [completionError, setCompletionError] = useState("");
   const [error, setError] = useState("");
+  const [editError, setEditError] = useState("");
+  const clearQuickReceipt = useCallback(() => setQuickReceipt(null), []);
 
   async function openReceipt(order: Order, mode: "customer" | "kitchen") {
     try {
@@ -53,32 +67,59 @@ export default function PosPage() {
     }
   }
 
+  async function printReceiptNow(order: Order, mode: "customer" | "kitchen") {
+    setCompletionError("");
+    setPrintingMode(mode);
+    try {
+      const document = await api<ReceiptDocument>(`/orders/${order.id}/receipt`);
+      setQuickReceipt({ document, mode });
+    } catch (reason) {
+      const receiptError = reason as ApiError;
+      setCompletionError(receiptError.message || "آماده‌سازی نسخه چاپی انجام نشد");
+    } finally {
+      setPrintingMode(null);
+    }
+  }
+
   const menu = useQuery({ queryKey: ["menu", "pos", "visible"], queryFn: () => api<MenuItem[]>("/menu-items?active=true") });
   const customers = useQuery({ queryKey: ["customers", customerSearch], queryFn: () => api<Customer[]>(`/customers?search=${encodeURIComponent(customerSearch)}`), enabled: customerMode === "existing" });
-  const orders = useQuery({ queryKey: ["orders-today"], queryFn: () => api<Order[]>(`/orders?day=${new Date().toISOString().slice(0, 10)}&limit=100`), refetchInterval: 20_000 });
+  const staff = useQuery({ queryKey: ["staff", "pos", staffSearch], queryFn: () => api<StaffMember[]>(`/staff?active=true&search=${encodeURIComponent(staffSearch)}`), enabled: customerMode === "staff" });
+  const orders = useQuery({ queryKey: ["orders-today"], queryFn: () => api<Order[]>(`/orders?day=${businessDate()}&limit=100`), refetchInterval: 20_000 });
   const orderMutation = useMutation({
     mutationFn: (body: object) => api<Order>("/orders", { method: "POST", body }),
     onSuccess: (order) => {
       setError("");
-      setCart({}); setDiscount("0"); setCustomer(null); setCustomerMode("guest"); setOrderNotes(""); setActiveOrder(order); void openReceipt(order, "customer");
-      client.invalidateQueries({ queryKey: ["orders-today"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); client.invalidateQueries({ queryKey: ["inventory"] }); client.invalidateQueries({ queryKey: ["menu", "pos"] });
+      setCompletionError("");
+      setCart({}); setDiscount("0"); setCustomer(null); setStaffMember(null); setCustomerMode("guest"); setOrderNotes(""); setCompletedOrder(order);
+      client.invalidateQueries({ queryKey: ["orders-today"] }); client.invalidateQueries({ queryKey: ["kitchen-orders"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); client.invalidateQueries({ queryKey: ["inventory"] }); client.invalidateQueries({ queryKey: ["menu", "pos"] });
     },
     onError: (reason) => { const err = reason as ApiError; if (typeof err.detail === "object" && err.detail && "items" in err.detail) setError(`موجودی مواد اولیه کافی نیست: ${(err.detail as {items: string[]}).items.join("، ")}`); else setError(err.message || "ثبت سفارش انجام نشد"); },
   });
-  const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: number; status: string }) => api<Order>(`/orders/${id}/status`, { method: "PATCH", body: { status } }), onSuccess: () => client.invalidateQueries({ queryKey: ["orders-today"] }) });
+  const editMutation = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: object }) => api<Order>(`/orders/${id}`, { method: "PATCH", body }),
+    onSuccess: (order) => {
+      setEditError(""); setEditingOrder(null); setActiveOrder(order);
+      client.invalidateQueries({ queryKey: ["orders-today"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); client.invalidateQueries({ queryKey: ["inventory"] }); client.invalidateQueries({ queryKey: ["menu", "pos"] }); client.invalidateQueries({ queryKey: ["kitchen-orders"] });
+    },
+    onError: (reason) => { const err = reason as ApiError; if (typeof err.detail === "object" && err.detail && "items" in err.detail) setEditError(`موجودی برای این ویرایش کافی نیست: ${(err.detail as {items: string[]}).items.join("، ")}`); else setEditError(err.message || "ویرایش سفارش انجام نشد"); },
+  });
+  const statusMutation = useMutation({ mutationFn: ({ id, status }: { id: number; status: string }) => api<Order>(`/orders/${id}/status`, { method: "PATCH", body: { status } }), onSuccess: (order) => { setActiveOrder(order); client.invalidateQueries({ queryKey: ["orders-today"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); client.invalidateQueries({ queryKey: ["kitchen-orders"] }); }, onError: (reason) => setError((reason as ApiError).message || "تغییر وضعیت سفارش انجام نشد") });
 
   const categories = ["همه", ...new Set(menu.data?.map((item) => item.category) || [])];
   const filteredMenu = menu.data?.filter((item) => (category === "همه" || item.category === category) && (!search || item.name.toLowerCase().includes(search.toLowerCase()))) || [];
   const lines = Object.values(cart);
   const subtotal = lines.reduce((sum, line) => sum + Number(line.item.selling_price) * line.quantity, 0);
-  const total = Math.max(0, subtotal - Number(discount || 0));
+  const isStaffMeal = customerMode === "staff";
+  const total = isStaffMeal ? 0 : Math.max(0, subtotal - Number(discount || 0));
 
   const add = (item: MenuItem) => { if (!item.is_available) return; setCart((current) => ({ ...current, [item.id]: { item, quantity: (current[item.id]?.quantity || 0) + 1, notes: current[item.id]?.notes || "" } })); };
   const changeQty = (id: number, delta: number) => setCart((current) => { const next = { ...current }; const line = next[id]; if (!line) return current; const quantity = line.quantity + delta; if (quantity <= 0) delete next[id]; else next[id] = { ...line, quantity }; return next; });
   const submitOrder = () => {
     if (!lines.length) return;
-    const body: Record<string, unknown> = { items: lines.map((line) => ({ menu_item_id: line.item.id, quantity: line.quantity, notes: line.notes || null })), discount: Number(discount || 0), payment_method: payment, notes: orderNotes || null };
+    if (isStaffMeal && !staffMember) { setError("برای غذای پرسنلی، نام پرسنل را انتخاب کنید"); return; }
+    const body: Record<string, unknown> = { items: lines.map((line) => ({ menu_item_id: line.item.id, quantity: line.quantity, notes: line.notes || null })), discount: isStaffMeal ? 0 : Number(discount || 0), payment_method: isStaffMeal ? "other" : payment, notes: orderNotes || null };
     if (customerMode === "existing" && customer) body.customer_id = customer.id;
+    if (customerMode === "staff" && staffMember) body.staff_member_id = staffMember.id;
     if (customerMode === "new") { const name = (document.getElementById("new-customer-name") as HTMLInputElement)?.value; const phone = (document.getElementById("new-customer-phone") as HTMLInputElement)?.value; if (!name || !phone) { setError("نام و شماره تلفن مشتری جدید را وارد کنید"); return; } body.customer = { name, phone }; }
     orderMutation.mutate(body);
   };
@@ -94,58 +135,132 @@ export default function PosPage() {
         </section>
         <aside className="panel cart-panel">
           <header className="cart-head"><div><span className="cart-number"><ReceiptText size={18} /></span><div><h2>سفارش جاری</h2><small>{quantity(lines.reduce((n, line) => n + line.quantity, 0))} قلم</small></div></div>{lines.length > 0 && <button onClick={() => setCart({})}>پاک کردن</button>}</header>
-          <div className="customer-switch"><button className={customerMode === "guest" ? "active" : ""} onClick={() => setCustomerMode("guest")}>مهمان</button><button className={customerMode === "existing" ? "active" : ""} onClick={() => setCustomerMode("existing")}><Users size={15} /> مشتری</button><button className={customerMode === "new" ? "active" : ""} onClick={() => setCustomerMode("new")}><UserPlus size={15} /> جدید</button></div>
+          <div className="customer-switch"><button className={customerMode === "guest" ? "active" : ""} onClick={() => { setCustomerMode("guest"); setCustomer(null); setStaffMember(null); }}>مهمان</button><button className={customerMode === "existing" ? "active" : ""} onClick={() => { setCustomerMode("existing"); setStaffMember(null); }}><Users size={15} /> مشتری</button><button className={customerMode === "staff" ? "active staff-mode" : ""} onClick={() => { setCustomerMode("staff"); setCustomer(null); setDiscount("0"); }}><ContactRound size={15} /> پرسنل</button><button className={customerMode === "new" ? "active" : ""} onClick={() => { setCustomerMode("new"); setCustomer(null); setStaffMember(null); }}><UserPlus size={15} /> جدید</button></div>
           {customerMode === "existing" && <div className="customer-picker"><label className="search-box"><Search size={16} /><input value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="نام یا شماره تلفن…" /></label>{customer && <div className="selected-customer"><span>{customer.name.charAt(0)}</span><div><strong>{customer.name}</strong><small>{customer.phone}</small></div><button onClick={() => setCustomer(null)}><X size={16}/></button></div>}{!customer && customers.data?.map((person) => <button key={person.id} onClick={() => setCustomer(person)}><span>{person.name.charAt(0)}</span><div><strong>{person.name}</strong><small>{person.phone}</small></div></button>)}</div>}
+          {customerMode === "staff" && <div className="customer-picker staff-picker"><div className="staff-mode-note"><ContactRound size={17} /><span><strong>غذای پرسنلی</strong><small>موجودی کم می‌شود؛ فروش و سود بدون تغییر می‌ماند.</small></span></div><label className="search-box"><Search size={16} /><input value={staffSearch} onChange={(e) => setStaffSearch(e.target.value)} placeholder="جست‌وجوی نام یا سمت پرسنل…" /></label>{staffMember && <div className="selected-customer selected-staff"><span>{staffMember.name.charAt(0)}</span><div><strong>{staffMember.name}{staffMember.is_current_user && <em>خودم</em>}</strong><small>{staffPosition(staffMember)}</small></div><button onClick={() => setStaffMember(null)}><X size={16}/></button></div>}{!staffMember && staff.data?.map((person) => <button key={person.id} onClick={() => setStaffMember(person)}><span>{person.name.charAt(0)}</span><div><strong>{person.name}{person.is_current_user && <em>خودم</em>}</strong><small>{staffPosition(person)}{person.user ? ` · @${person.user.username}` : ""}</small></div></button>)}</div>}
           {customerMode === "new" && <div className="new-customer"><input id="new-customer-name" placeholder="نام مشتری" /><input id="new-customer-phone" placeholder="شماره تلفن" inputMode="tel" /></div>}
           <div className="cart-lines">{lines.length ? lines.map((line) => <div className="cart-line" key={line.item.id}><div className="line-top"><div><strong>{line.item.name}</strong><small>هر عدد {money(line.item.selling_price)}</small></div><strong>{money(Number(line.item.selling_price) * line.quantity)}</strong></div><div className="line-controls"><button onClick={() => changeQty(line.item.id, -1)}>{line.quantity === 1 ? <Trash2 size={15} /> : <Minus size={15} />}</button><span>{quantity(line.quantity)}</span><button onClick={() => changeQty(line.item.id, 1)}><Plus size={15} /></button><input value={line.notes} onChange={(e) => setCart((current) => ({ ...current, [line.item.id]: { ...line, notes: e.target.value } }))} placeholder="توضیح برای آشپزخانه…" /></div></div>) : <EmptyState icon={<ShoppingBag />} title="سبد سفارش خالی است" text="برای افزودن، یک محصول از منو انتخاب کنید." />}</div>
-          <div className="cart-options"><label><span>تخفیف</span><input value={discount} onChange={(e) => setDiscount(e.target.value)} type="number" min="0" step="0.01" /></label><label><span>روش پرداخت</span><select value={payment} onChange={(e) => setPayment(e.target.value)}><option value="card">کارت‌خوان</option><option value="cash">نقدی</option><option value="online">آنلاین</option><option value="other">سایر</option></select></label><input value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} placeholder="توضیح کلی سفارش (اختیاری)" /></div>
-          <div className="cart-totals"><span><small>جمع اقلام</small><strong>{money(subtotal)}</strong></span><span><small>تخفیف</small><strong>− {money(discount)}</strong></span><span className="grand-total"><small>مبلغ نهایی</small><strong>{money(total)}</strong></span></div>
+          <div className={`cart-options ${isStaffMeal ? "staff-cart-options" : ""}`}>{isStaffMeal ? <div className="staff-no-payment"><BadgeCheck size={18} /><span><strong>بدون دریافت وجه</strong><small>ارزش منو فقط در حساب داخلی پرسنل نگهداری می‌شود.</small></span></div> : <><label><span>تخفیف</span><input value={discount} onChange={(e) => setDiscount(e.target.value)} type="number" min="0" step="0.01" /></label><label><span>روش پرداخت</span><select value={payment} onChange={(e) => setPayment(e.target.value)}><option value="card">کارت‌خوان</option><option value="cash">نقدی</option><option value="online">آنلاین</option><option value="other">سایر</option></select></label></>}<input value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} placeholder={isStaffMeal ? "توضیح غذای پرسنلی (اختیاری)" : "توضیح کلی سفارش (اختیاری)"} /></div>
+          <div className={`cart-totals ${isStaffMeal ? "staff-cart-totals" : ""}`}><span><small>{isStaffMeal ? "ارزش منو" : "جمع اقلام"}</small><strong>{money(subtotal)}</strong></span>{!isStaffMeal && <span><small>تخفیف</small><strong>− {money(discount)}</strong></span>}<span className="grand-total"><small>{isStaffMeal ? "قابل پرداخت" : "مبلغ نهایی"}</small><strong>{isStaffMeal ? "بدون دریافت وجه" : money(total)}</strong></span></div>
           {error && <div className="form-error">{error}</div>}
-          <Button className="place-order" disabled={!lines.length || orderMutation.isPending} onClick={submitOrder}>{orderMutation.isPending ? "در حال ثبت سفارش…" : <><Check size={19} /> ثبت سفارش · {money(total)}</>}</Button>
+          <Button className={`place-order ${isStaffMeal ? "staff-place-order" : ""}`} disabled={!lines.length || orderMutation.isPending || (isStaffMeal && !staffMember)} onClick={submitOrder}>{orderMutation.isPending ? "در حال ثبت سفارش…" : isStaffMeal ? <><ContactRound size={19} /> ثبت غذای پرسنلی · بدون دریافت</> : <><Check size={19} /> ثبت سفارش · {money(total)}</>}</Button>
         </aside>
       </div>
 
-      <section className="panel orders-today"><header className="panel-header"><div><h2>سفارش‌های امروز</h2><p>هر سفارش را از ثبت تا تکمیل دنبال کنید.</p></div></header>{orders.data?.length ? <div className="order-board">{orders.data.map((order) => <button key={order.id} className="order-ticket" onClick={() => setActiveOrder(order)}><div><strong>{order.order_number}</strong><Badge tone={order.status === "cancelled" ? "danger" : order.status === "completed" ? "success" : "info"}>{statusLabel[order.status]}</Badge></div><h3>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</h3><p>{order.items.map((item) => `${quantity(item.quantity)}× ${item.name}`).join(" · ")}</p><footer><span>{dateTime(order.created_at)}</span><strong>{money(order.total)}</strong></footer></button>)}</div> : <EmptyState icon={<ClipboardCheck />} title="امروز سفارشی ثبت نشده" text="سفارش‌های جدید به‌صورت زنده اینجا نمایش داده می‌شوند." />}</section>
+      <section className="panel orders-today"><header className="panel-header"><div><h2>سفارش‌های امروز</h2><p>هر سفارش را از ثبت تا تکمیل دنبال کنید.</p></div></header>{orders.data?.length ? <div className="order-board">{orders.data.map((order) => <button key={order.id} className={`order-ticket ${order.is_staff_meal ? "staff-order-ticket" : ""}`} onClick={() => setActiveOrder(order)}><div><strong>{order.order_number}</strong><span className="order-ticket-badges">{order.is_staff_meal && <Badge tone="violet">پرسنلی</Badge>}<Badge tone={order.status === "cancelled" ? "danger" : order.status === "completed" ? "success" : "info"}>{statusLabel[order.status]}</Badge></span></div><h3>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</h3><p>{order.items.map((item) => `${quantity(item.quantity)}× ${item.name}`).join(" · ")}</p><footer><span>{dateTime(order.created_at)}</span><strong>{order.is_staff_meal ? "بدون دریافت" : money(order.total)}</strong></footer></button>)}</div> : <EmptyState icon={<ClipboardCheck />} title="امروز سفارشی ثبت نشده" text="سفارش‌های جدید به‌صورت زنده اینجا نمایش داده می‌شوند." />}</section>
 
-      <OrderModal order={activeOrder} close={() => setActiveOrder(null)} print={(mode) => activeOrder && void openReceipt(activeOrder, mode)} changeStatus={(status) => activeOrder && statusMutation.mutate({ id: activeOrder.id, status })} />
+      <OrderCompleteModal order={completedOrder} printingMode={printingMode} error={completionError} print={(mode) => completedOrder && void printReceiptNow(completedOrder, mode)} close={() => { setCompletedOrder(null); setCompletionError(""); setQuickReceipt(null); }} />
+      <OrderModal order={activeOrder} close={() => setActiveOrder(null)} print={(mode) => activeOrder && void openReceipt(activeOrder, mode)} changeStatus={(status) => activeOrder && statusMutation.mutate({ id: activeOrder.id, status })} edit={() => { if (activeOrder) { setEditError(""); setEditingOrder(activeOrder); setActiveOrder(null); } }} />
+      {editingOrder && <EditOrderModal key={editingOrder.id} order={editingOrder} menu={menu.data || []} close={() => { setEditingOrder(null); setEditError(""); }} save={(body) => editMutation.mutate({ id: editingOrder.id, body })} pending={editMutation.isPending} error={editError} />}
       <ReceiptModal receipt={receipt} brand={brand} close={() => setReceipt(null)} />
+      <AutoPrintReceipt receipt={quickReceipt} brand={brand} clear={clearQuickReceipt} />
     </div>
   );
 }
 
-function OrderModal({ order, close, print, changeStatus }: { order: Order | null; close: () => void; print: (mode: "customer" | "kitchen") => void; changeStatus: (status: string) => void }) {
+function OrderCompleteModal({ order, printingMode, error, print, close }: { order: Order | null; printingMode: "customer" | "kitchen" | null; error: string; print: (mode: "customer" | "kitchen") => void; close: () => void }) {
   if (!order) return null;
-  const next: Record<string, { label: string; value: string } | undefined> = { confirmed: { label: "شروع آماده‌سازی", value: "preparing" }, preparing: { label: "اعلام آماده تحویل", value: "ready" }, ready: { label: "تکمیل سفارش", value: "completed" } };
-  return <Modal open title={order.order_number} onClose={close}><div className="order-detail-head"><div><small>مشتری</small><strong>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</strong><span>{dateTime(order.created_at)}</span></div><Badge tone={order.status === "cancelled" ? "danger" : order.status === "completed" ? "success" : "info"}>{statusLabel[order.status]}</Badge></div><div className="order-detail-lines">{order.items.map((line) => <div key={line.id}><span>{quantity(line.quantity)} × {line.name}{line.notes && <small>{line.notes}</small>}</span><strong>{money(line.line_total)}</strong></div>)}</div><div className="order-detail-total"><span>مبلغ نهایی</span><strong>{money(order.total)}</strong></div><div className="receipt-actions"><Button variant="secondary" onClick={() => print("kitchen")}><ChefHat size={17} /> فیش آشپزخانه</Button><Button variant="secondary" onClick={() => print("customer")}><Printer size={17} /> رسید مشتری</Button></div>{next[order.status] && <Button className="full-button" onClick={() => changeStatus(next[order.status]!.value)}>{next[order.status]!.label}</Button>}</Modal>;
+  const sentToKitchen = ["confirmed", "preparing", "ready"].includes(order.status);
+  return <Modal open title="سفارش با موفقیت ثبت شد" onClose={close}>
+    <div className="order-complete-step">
+      <div className="order-complete-icon"><CircleCheckBig /></div>
+      <div className="order-complete-heading"><span>شماره سفارش</span><strong>{order.order_number}</strong><small>{order.customer_name === "Guest" ? "مهمان" : order.customer_name} · {order.is_staff_meal ? "بدون دریافت وجه" : money(order.total)}</small></div>
+      <div className={`order-workflow-result ${sentToKitchen ? "sent-to-kitchen" : "completed-directly"}`}><ChefHat /><span><strong>{sentToKitchen ? "به آشپزخانه ارسال شد" : "سفارش تکمیل شد"}</strong><small>{sentToKitchen ? "حالت آشپزخانه روشن است و سفارش اکنون در صف آماده‌سازی قرار دارد." : "حالت آشپزخانه خاموش است؛ سفارش بدون مراحل سه‌گانه با موفقیت تکمیل شد."}</small></span></div>
+      <div className="order-complete-actions">
+        <Button variant="secondary" disabled={printingMode !== null} onClick={() => print("customer")}><Printer size={22} /><span><strong>{printingMode === "customer" ? "در حال آماده‌سازی…" : order.is_staff_meal ? "چاپ برگه پرسنلی" : "چاپ رسید مشتری"}</strong><small>چاپ مستقیم، بدون اسکرول</small></span></Button>
+        <Button variant="secondary" disabled={printingMode !== null} onClick={() => print("kitchen")}><ChefHat size={22} /><span><strong>{printingMode === "kitchen" ? "در حال آماده‌سازی…" : "چاپ فیش آشپزخانه"}</strong><small>نسخه خوانا برای آماده‌سازی</small></span></Button>
+      </div>
+      {error && <div className="form-error">{error}</div>}
+      <Button className="order-complete-done" disabled={printingMode !== null} onClick={close}><Check size={19} /> تمام</Button>
+    </div>
+  </Modal>;
 }
 
-function ReceiptModal({ receipt, brand, close }: { receipt: ReceiptState | null; brand: { business_name: string; logo_url: string | null }; close: () => void }) {
-  if (!receipt) return null;
+function OrderModal({ order, close, print, changeStatus, edit }: { order: Order | null; close: () => void; print: (mode: "customer" | "kitchen") => void; changeStatus: (status: string) => void; edit: () => void }) {
+  if (!order) return null;
+  const next: Record<string, { label: string; value: string } | undefined> = { confirmed: { label: "شروع آماده‌سازی", value: "preparing" }, preparing: { label: "اعلام آماده تحویل", value: "ready" }, ready: { label: "تکمیل سفارش", value: "completed" } };
+  return <Modal open title={order.order_number} onClose={close}><div className="order-detail-head"><div><small>{order.is_staff_meal ? "پرسنل" : "مشتری"}</small><strong>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</strong><span>{dateTime(order.created_at)}</span></div><div className="order-detail-badges">{order.is_staff_meal && <Badge tone="violet">غذای پرسنلی</Badge>}<Badge tone={order.status === "cancelled" ? "danger" : order.status === "completed" ? "success" : "info"}>{statusLabel[order.status]}</Badge></div></div><div className="order-detail-lines">{order.items.map((line) => <div key={line.id}><span>{quantity(line.quantity)} × {line.name}{line.notes && <small>{line.notes}</small>}</span><strong>{order.is_staff_meal ? quantity(line.quantity) : money(line.line_total)}</strong></div>)}</div><div className={`order-detail-total ${order.is_staff_meal ? "staff-order-total" : ""}`}><span>{order.is_staff_meal ? "نوع ثبت" : "مبلغ نهایی"}</span><strong>{order.is_staff_meal ? "مصرف داخلی · بدون دریافت وجه" : money(order.total)}</strong></div>{order.status !== "cancelled" && <Button variant="secondary" className="full-button order-edit-trigger" onClick={edit}><Pencil size={17} /> ویرایش اقلام و اطلاعات سفارش</Button>}<div className="receipt-actions"><Button variant="secondary" onClick={() => print("kitchen")}><ChefHat size={17} /> فیش آشپزخانه</Button><Button variant="secondary" onClick={() => print("customer")}><Printer size={17} /> {order.is_staff_meal ? "برگه پرسنلی" : "رسید مشتری"}</Button></div>{next[order.status] && <Button className="full-button" onClick={() => changeStatus(next[order.status]!.value)}>{next[order.status]!.label}</Button>}</Modal>;
+}
+
+function EditOrderModal({ order, menu, close, save, pending, error }: { order: Order; menu: MenuItem[]; close: () => void; save: (body: object) => void; pending: boolean; error: string }) {
+  const [search, setSearch] = useState("");
+  const [lines, setLines] = useState<Record<number, EditableOrderLine>>(() => Object.fromEntries(order.items.map((line) => { const current = menu.find((item) => item.id === line.menu_item_id); return [line.menu_item_id, { menu_item_id: line.menu_item_id, name: line.name, unit_price: Number(current?.selling_price ?? line.unit_price), quantity: line.quantity, notes: line.notes || "" }]; })));
+  const [discount, setDiscount] = useState(String(order.is_staff_meal ? 0 : order.discount));
+  const [payment, setPayment] = useState(order.payment_method);
+  const [notes, setNotes] = useState(order.notes || "");
+  const orderLines = Object.values(lines);
+  const subtotal = orderLines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
+  const total = order.is_staff_meal ? 0 : Math.max(0, subtotal - Number(discount || 0));
+  const candidates = menu.filter((item) => !search.trim() || item.name.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 60);
+  const addItem = (item: MenuItem) => { if (!item.is_available && !lines[item.id]) return; setLines((current) => ({ ...current, [item.id]: { menu_item_id: item.id, name: item.name, unit_price: Number(item.selling_price), quantity: (current[item.id]?.quantity || 0) + 1, notes: current[item.id]?.notes || "" } })); };
+  const changeQuantity = (id: number, delta: number) => setLines((current) => { const line = current[id]; if (!line) return current; const next = { ...current }; const nextQuantity = line.quantity + delta; if (nextQuantity <= 0) delete next[id]; else next[id] = { ...line, quantity: nextQuantity }; return next; });
+  const submit = () => save({ items: orderLines.map((line) => ({ menu_item_id: line.menu_item_id, quantity: line.quantity, notes: line.notes || null })), discount: order.is_staff_meal ? 0 : Number(discount || 0), payment_method: order.is_staff_meal ? "other" : payment, notes: notes || null });
+
+  return <Modal open title={`ویرایش ${order.order_number}`} onClose={close} wide>
+    <div className="edit-order-notice"><Pencil size={18} /><span><strong>ویرایش امن سفارش ثبت‌شده</strong><small>اختلاف مواد اولیه به‌صورت خودکار از انبار کسر یا به آن بازگردانده می‌شود و جزئیات تغییر در گزارش فعالیت‌ها می‌ماند.</small></span>{order.status === "completed" && <Badge tone="warning">اصلاح سفارش تکمیل‌شده</Badge>}</div>
+    <div className="edit-order-layout">
+      <section className="edit-menu-picker"><header><div><h3>افزودن از منوی فروش</h3><small>برای افزودن، محصول را انتخاب کنید.</small></div><label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="جست‌وجوی محصول…" /></label></header><div className="edit-menu-grid">{candidates.map((item) => <button type="button" key={item.id} disabled={!item.is_available && !lines[item.id]} className={lines[item.id] ? "selected" : ""} onClick={() => addItem(item)}><span><strong>{item.name}</strong><small>{item.category}</small></span><b>{money(item.selling_price)}</b>{lines[item.id] && <i>{quantity(lines[item.id].quantity)}</i>}</button>)}</div></section>
+      <aside className="edit-order-cart"><header><div><h3>اقلام اصلاح‌شده</h3><small>{quantity(orderLines.reduce((count, line) => count + line.quantity, 0))} قلم</small></div><strong>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</strong></header><div className="edit-order-lines">{orderLines.length ? orderLines.map((line) => <div key={line.menu_item_id} className="edit-order-line"><div className="line-top"><span><strong>{line.name}</strong><small>هر عدد {money(line.unit_price)}</small></span><b>{money(line.unit_price * line.quantity)}</b></div><div className="line-controls"><button type="button" onClick={() => changeQuantity(line.menu_item_id, -1)}>{line.quantity === 1 ? <Trash2 size={15} /> : <Minus size={15} />}</button><span>{quantity(line.quantity)}</span><button type="button" onClick={() => changeQuantity(line.menu_item_id, 1)}><Plus size={15} /></button><input value={line.notes} onChange={(event) => setLines((current) => ({ ...current, [line.menu_item_id]: { ...line, notes: event.target.value } }))} placeholder="توضیح قلم…" /></div></div>) : <EmptyState icon={<ShoppingBag />} title="سفارش بدون قلم است" text="حداقل یک محصول از منو اضافه کنید." />}</div><div className="edit-order-options">{!order.is_staff_meal && <><label><span>تخفیف</span><input type="number" min="0" max={subtotal} value={discount} onChange={(event) => setDiscount(event.target.value)} /></label><label><span>روش پرداخت</span><select value={payment} onChange={(event) => setPayment(event.target.value)}><option value="card">کارت‌خوان</option><option value="cash">نقدی</option><option value="online">آنلاین</option><option value="other">سایر</option></select></label></>}<label className="wide"><span>توضیح کلی سفارش</span><input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="اختیاری" /></label></div><div className={`edit-order-total ${order.is_staff_meal ? "staff-order-total" : ""}`}><span><small>{order.is_staff_meal ? "ارزش منو" : "جمع اقلام"}</small><strong>{money(subtotal)}</strong></span>{!order.is_staff_meal && <span><small>مبلغ نهایی</small><strong>{money(total)}</strong></span>}{order.is_staff_meal && <span><small>قابل پرداخت</small><strong>بدون دریافت وجه</strong></span>}</div>{error && <div className="form-error">{error}</div>}<div className="edit-order-actions"><Button type="button" variant="secondary" onClick={close}>انصراف</Button><Button type="button" disabled={pending || !orderLines.length || (!order.is_staff_meal && Number(discount || 0) > subtotal)} onClick={submit}><Save size={17} /> {pending ? "در حال ذخیره…" : "ذخیره و محاسبه مجدد"}</Button></div></aside>
+    </div>
+  </Modal>;
+}
+
+function ReceiptContent({ receipt, brand }: { receipt: ReceiptState; brand: { business_name: string; logo_url: string | null } }) {
   const { document, mode } = receipt;
   const { order, quote } = document;
-  const profile = mode === "kitchen" ? document.kitchen_copy : document.customer_copy;
-  return <Modal open title={profile.title} onClose={close}>
-    <div className={`receipt receipt-mode-${mode}`} id="printable-receipt" dir="rtl">
+  const showPrices = mode === "customer" && document.customer_copy.show_prices;
+  return <div className={`receipt receipt-mode-${mode}`} id="printable-receipt" dir="rtl">
       <header className="receipt-header">
         {brand.logo_url && <img src={brand.logo_url} alt="" />}
-        <span className="receipt-copy-label">{mode === "kitchen" ? "فیش آماده‌سازی" : "شاورماچی"}</span>
-        <h2>{mode === "kitchen" ? "آشپزخانه" : brand.business_name}</h2>
+        <span className="receipt-copy-label">{mode === "kitchen" ? "فیش آماده‌سازی" : order.is_staff_meal ? "مصرف داخلی" : "شاورماچی"}</span>
+        <h2>{mode === "kitchen" ? "آشپزخانه" : order.is_staff_meal ? "غذای پرسنلی" : brand.business_name}</h2>
         <div className="receipt-order-number"><small>شماره سفارش</small><strong>{order.order_number}</strong></div>
         <p>{dateTime(order.created_at)}</p>
       </header>
-      <div className="receipt-customer"><span>مشتری</span><strong>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</strong></div>
-      {mode === "customer" && <div className="receipt-columns"><span>شرح سفارش</span><strong>مبلغ</strong></div>}
-      <div className="receipt-lines">{order.items.map((line) => <div key={line.id}><span className="receipt-line-main"><b>{line.name}</b>{mode === "customer" && <small>{quantity(line.quantity)} عدد × {money(line.unit_price)}</small>}{mode === "kitchen" && <small className="kitchen-quantity">تعداد: {quantity(line.quantity)}</small>}{line.notes && <em>توضیح مهم: {line.notes}</em>}</span>{mode === "customer" && <strong>{money(line.line_total)}</strong>}</div>)}</div>
-      {mode === "customer" && <div className="receipt-summary"><span>جمع اقلام <b>{money(order.subtotal)}</b></span><span>تخفیف <b>{money(order.discount)}</b></span><span className="receipt-grand-total">مبلغ نهایی <b>{money(order.total)}</b></span><small>روش پرداخت: {statusLabel[order.payment_method]}</small></div>}
+      <div className="receipt-customer"><span>{order.is_staff_meal ? "پرسنل" : "مشتری"}</span><strong>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</strong></div>
+      {showPrices && <div className="receipt-columns"><span>شرح سفارش</span><strong>مبلغ</strong></div>}
+      <div className="receipt-lines">{order.items.map((line) => <div key={line.id}><span className="receipt-line-main"><b>{line.name}</b>{mode === "customer" && <small>{quantity(line.quantity)} عدد{showPrices ? ` × ${money(line.unit_price)}` : ""}</small>}{mode === "kitchen" && <small className="kitchen-quantity">تعداد: {quantity(line.quantity)}</small>}{line.notes && <em>توضیح مهم: {line.notes}</em>}</span>{showPrices && <strong>{money(line.line_total)}</strong>}</div>)}</div>
+      {showPrices && <div className="receipt-summary"><span>جمع اقلام <b>{money(order.subtotal)}</b></span><span>تخفیف <b>{money(order.discount)}</b></span><span className="receipt-grand-total">مبلغ نهایی <b>{money(order.total)}</b></span><small>روش پرداخت: {statusLabel[order.payment_method]}</small></div>}
+      {mode === "customer" && order.is_staff_meal && <div className="staff-receipt-note"><strong>بدون دریافت وجه</strong><span>مصرف داخلی پرسنل · خارج از فروش، درآمد و سود</span></div>}
       {mode === "kitchen" && order.notes && <div className="kitchen-order-note"><span>توضیح کلی سفارش</span><strong>{order.notes}</strong></div>}
       <figure className="receipt-quote">
         <figcaption>یک جمله برای امروز</figcaption>
         <blockquote>«{quote.body}»</blockquote>
         <cite>— {quote.author}</cite>
       </figure>
-      <footer><strong>{mode === "customer" ? "از انتخاب شما سپاسگزاریم" : "با دقت آماده و کنترل شود"}</strong><span>{mode === "customer" ? "به امید دیدار دوباره" : "کنترل نهایی پیش از تحویل"}</span><small>{order.order_number}</small></footer>
-    </div>
+      <footer><strong>{mode === "customer" ? document.customer_copy.footer : "با دقت آماده و کنترل شود"}</strong><span>{mode === "customer" ? order.is_staff_meal ? "ثبت‌شده در حساب پرسنل" : "به امید دیدار دوباره" : "کنترل نهایی پیش از تحویل"}</span><small>{order.order_number}</small></footer>
+    </div>;
+}
+
+function ReceiptModal({ receipt, brand, close }: { receipt: ReceiptState | null; brand: { business_name: string; logo_url: string | null }; close: () => void }) {
+  if (!receipt) return null;
+  const profile = receipt.mode === "kitchen" ? receipt.document.kitchen_copy : receipt.document.customer_copy;
+  return <Modal open title={profile.title} onClose={close}>
+    <ReceiptContent receipt={receipt} brand={brand} />
     <div className="receipt-print-note">چاپ حرفه‌ای ۸۰ میلی‌متری · فونت فارسی فوق‌پررنگ · کنتراست خالص سیاه‌وسفید</div>
     <Button className="full-button print-trigger" onClick={() => window.print()}><Printer size={18} /> چاپ {profile.title}</Button>
   </Modal>;
+}
+
+function AutoPrintReceipt({ receipt, brand, clear }: { receipt: ReceiptState | null; brand: { business_name: string; logo_url: string | null }; clear: () => void }) {
+  useEffect(() => {
+    if (!receipt) return;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clear();
+    };
+    const printTimer = window.setTimeout(() => window.print(), 80);
+    const fallbackTimer = window.setTimeout(finish, 120_000);
+    window.addEventListener("afterprint", finish);
+    return () => {
+      window.clearTimeout(printTimer);
+      window.clearTimeout(fallbackTimer);
+      window.removeEventListener("afterprint", finish);
+    };
+  }, [receipt, clear]);
+
+  if (!receipt) return null;
+  return <div className="auto-print-receipt" aria-hidden="true"><ReceiptContent receipt={receipt} brand={brand} /></div>;
 }

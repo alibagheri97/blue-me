@@ -1,2 +1,1 @@
-"""Blue Me business management API."""
-
+"""Shaverma-chi business management API."""

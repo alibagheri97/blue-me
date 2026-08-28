@@ -11,13 +11,13 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False
     )
 
-    app_name: str = "Blue Me"
-    business_name: str = "Blue Me Demo"
+    app_name: str = "Shaverma-chi"
+    business_name: str = "شاورماچی"
     brand_tagline: str = "Run your business with clarity"
     brand_primary_color: str = "#2563eb"
     brand_logo_url: str | None = None
     app_locale: str = "fa"
-    app_timezone: str = "UTC"
+    app_timezone: str = "Asia/Tehran"
     currency_label: str = "تومان"
     app_env: str = "development"
     app_secret_key: str = Field(default="development-only-secret-change-me-please")

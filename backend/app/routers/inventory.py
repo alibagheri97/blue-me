@@ -37,10 +37,17 @@ from app.schemas import (
     PriceRequestRead,
 )
 from app.services.inventory_alerts import sync_auto_purchase_need
+from app.services.business_time import business_datetime
+from app.services.units import unit_price
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 inventory_roles = require_roles(UserRole.ROOT, UserRole.STORAGE_MANAGER)
-all_staff = require_roles(*list(UserRole))
+inventory_view_roles = require_roles(
+    UserRole.ROOT,
+    UserRole.STORAGE_MANAGER,
+    UserRole.ACCOUNTING_MANAGER,
+    UserRole.SALES_MANAGER,
+)
 IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
 
@@ -58,6 +65,7 @@ PRICE_LABELS = {
     PriceType.PURCHASE: "purchase",
     PriceType.SELLING: "selling",
 }
+CENT = Decimal("0.01")
 
 
 def item_price(item: InventoryItem, price_type: PriceType) -> Decimal:
@@ -66,14 +74,62 @@ def item_price(item: InventoryItem, price_type: PriceType) -> Decimal:
     return Decimal(item.selling_price)
 
 
-def apply_item_price(item: InventoryItem, price_type: PriceType, value: Decimal) -> None:
+def item_package(item: InventoryItem, price_type: PriceType) -> tuple[Decimal, str, Decimal]:
+    if price_type == PriceType.PURCHASE:
+        return (
+            Decimal(item.purchase_quantity),
+            item.purchase_unit,
+            Decimal(item.purchase_total_price),
+        )
+    return (
+        Decimal(item.selling_quantity),
+        item.selling_unit,
+        Decimal(item.selling_total_price),
+    )
+
+
+def normalize_package_price(
+    *,
+    stock_unit: str,
+    package_quantity: Decimal,
+    package_unit: str,
+    package_total_price: Decimal,
+) -> Decimal:
+    try:
+        return unit_price(
+            package_total_price,
+            package_quantity,
+            package_unit,
+            stock_unit,
+        ).quantize(CENT)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def apply_item_price(
+    item: InventoryItem,
+    price_type: PriceType,
+    value: Decimal,
+    *,
+    package_quantity: Decimal | None = None,
+    package_unit: str | None = None,
+    package_total_price: Decimal | None = None,
+) -> None:
     if price_type == PriceType.PURCHASE:
         # A manual purchase-price edit intentionally revalues current stock and becomes the
         # reference price shown for the next intake. Historic receipts and order costs remain intact.
         item.average_cost = value
         item.last_purchase_price = value
+        if package_quantity is not None and package_unit is not None and package_total_price is not None:
+            item.purchase_quantity = package_quantity
+            item.purchase_unit = package_unit
+            item.purchase_total_price = package_total_price
     else:
         item.selling_price = value
+        if package_quantity is not None and package_unit is not None and package_total_price is not None:
+            item.selling_quantity = package_quantity
+            item.selling_unit = package_unit
+            item.selling_total_price = package_total_price
 
 
 def stage_price_change(
@@ -84,10 +140,21 @@ def stage_price_change(
     price_type: PriceType,
     requested_price: Decimal,
     reason: str | None,
+    package_quantity: Decimal | None = None,
+    package_unit: str | None = None,
+    package_total_price: Decimal | None = None,
 ) -> PriceChangeRequest | None:
     old_price = item_price(item, price_type)
-    requested_price = Decimal(requested_price)
-    if requested_price == old_price:
+    requested_price = Decimal(requested_price).quantize(CENT)
+    current_package = item_package(item, price_type)
+    requested_package = (
+        Decimal(package_quantity),
+        package_unit,
+        Decimal(package_total_price).quantize(CENT),
+    ) if package_quantity is not None and package_unit is not None and package_total_price is not None else None
+    if requested_price == old_price and (
+        requested_package is None or requested_package == current_package
+    ):
         return None
 
     clean_reason = (reason or "").strip()
@@ -116,12 +183,22 @@ def stage_price_change(
             pending.decided_by_id = actor.id
             pending.decision_note = "Superseded by a direct root price edit"
             pending.decided_at = now
-        apply_item_price(item, price_type, requested_price)
+        apply_item_price(
+            item,
+            price_type,
+            requested_price,
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
+        )
         price_request = PriceChangeRequest(
             item_id=item.id,
             price_type=price_type,
             old_price=old_price,
             requested_price=requested_price,
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
             reason=clean_reason,
             status=ApprovalStatus.APPROVED,
             requested_by_id=actor.id,
@@ -147,6 +224,9 @@ def stage_price_change(
             price_type=price_type,
             old_price=old_price,
             requested_price=requested_price,
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
             reason=clean_reason,
             requested_by_id=actor.id,
         )
@@ -183,13 +263,18 @@ def audit_price_change(
             "old_price": str(price_request.old_price),
             "new_price": str(price_request.requested_price),
             "reason": price_request.reason,
+            "package_quantity": str(price_request.package_quantity) if price_request.package_quantity is not None else None,
+            "package_unit": price_request.package_unit,
+            "package_total_price": str(price_request.package_total_price) if price_request.package_total_price is not None else None,
         },
         ip_address=client_ip(request),
     )
 
 
 @router.get("/categories", response_model=list[CategoryRead])
-def list_categories(_: User = Depends(all_staff), db: Session = Depends(get_db)) -> list[Category]:
+def list_categories(
+    _: User = Depends(inventory_roles), db: Session = Depends(get_db)
+) -> list[Category]:
     return list(db.scalars(select(Category).order_by(Category.name)))
 
 
@@ -287,7 +372,7 @@ def list_items(
     active: bool | None = True,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=24, ge=1, le=100),
-    _: User = Depends(all_staff),
+    _: User = Depends(inventory_view_roles),
     db: Session = Depends(get_db),
 ) -> PaginatedItems:
     filters = []
@@ -326,24 +411,56 @@ def create_item(
     data = payload.model_dump()
     requested_purchase_price = data.pop("purchase_price")
     requested_selling_price = data.pop("selling_price")
-    item = InventoryItem(**data, average_cost=0, last_purchase_price=0, selling_price=0)
+    purchase_quantity = data.pop("purchase_quantity")
+    purchase_unit = data.pop("purchase_unit") or data["unit"]
+    selling_quantity = data.pop("selling_quantity")
+    selling_unit = data.pop("selling_unit") or data["unit"]
+    item = InventoryItem(
+        **data,
+        average_cost=0,
+        last_purchase_price=0,
+        selling_price=0,
+        purchase_quantity=Decimal("1"),
+        purchase_unit=data["unit"],
+        purchase_total_price=0,
+        selling_quantity=Decimal("1"),
+        selling_unit=data["unit"],
+        selling_total_price=0,
+    )
     db.add(item)
     db.flush()
     initial_prices = (
-        (PriceType.PURCHASE, requested_purchase_price),
-        (PriceType.SELLING, requested_selling_price),
+        (PriceType.PURCHASE, purchase_quantity, purchase_unit, requested_purchase_price),
+        (PriceType.SELLING, selling_quantity, selling_unit, requested_selling_price),
     )
     price_requests = []
-    for price_type, requested_price in initial_prices:
-        if requested_price <= 0:
+    for price_type, package_quantity, package_unit, package_total_price in initial_prices:
+        normalized_price = normalize_package_price(
+            stock_unit=item.unit,
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
+        )
+        if package_total_price <= 0:
+            apply_item_price(
+                item,
+                price_type,
+                normalized_price,
+                package_quantity=package_quantity,
+                package_unit=package_unit,
+                package_total_price=package_total_price,
+            )
             continue
         price_request = stage_price_change(
             db,
             item=item,
             actor=actor,
             price_type=price_type,
-            requested_price=requested_price,
+            requested_price=normalized_price,
             reason=f"Initial {PRICE_LABELS[price_type]} price",
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
         )
         if price_request is not None:
             price_requests.append(price_request)
@@ -375,7 +492,9 @@ def create_item(
 
 
 @router.get("/items/{item_id}", response_model=InventoryItemRead)
-def get_item(item_id: int, _: User = Depends(all_staff), db: Session = Depends(get_db)) -> InventoryItem:
+def get_item(
+    item_id: int, _: User = Depends(inventory_roles), db: Session = Depends(get_db)
+) -> InventoryItem:
     query = (
         select(InventoryItem)
         .options(selectinload(InventoryItem.category))
@@ -399,7 +518,12 @@ def update_item(
     changes = payload.model_dump(exclude_unset=True)
     requested_purchase_price = changes.pop("purchase_price", None)
     requested_selling_price = changes.pop("selling_price", None)
+    requested_purchase_quantity = changes.pop("purchase_quantity", None)
+    requested_purchase_unit = changes.pop("purchase_unit", None)
+    requested_selling_quantity = changes.pop("selling_quantity", None)
+    requested_selling_unit = changes.pop("selling_unit", None)
     price_change_reason = changes.pop("price_change_reason", None)
+    unit_changed = "unit" in changes and changes["unit"] != item.unit
     if "sku" in changes:
         duplicate = db.scalar(
             select(InventoryItem.id).where(InventoryItem.sku == changes["sku"], InventoryItem.id != item_id)
@@ -420,19 +544,49 @@ def update_item(
     for key, value in changes.items():
         setattr(item, key, value)
     price_requests = []
-    for price_type, requested_price in (
-        (PriceType.PURCHASE, requested_purchase_price),
-        (PriceType.SELLING, requested_selling_price),
+    for price_type, requested_package_quantity, requested_package_unit, requested_total_price in (
+        (
+            PriceType.PURCHASE,
+            requested_purchase_quantity,
+            requested_purchase_unit,
+            requested_purchase_price,
+        ),
+        (
+            PriceType.SELLING,
+            requested_selling_quantity,
+            requested_selling_unit,
+            requested_selling_price,
+        ),
     ):
-        if requested_price is None:
+        if (
+            requested_package_quantity is None
+            and requested_package_unit is None
+            and requested_total_price is None
+            and not unit_changed
+        ):
             continue
+        current_quantity, current_unit, current_total_price = item_package(item, price_type)
+        package_quantity = requested_package_quantity or current_quantity
+        package_unit = requested_package_unit or current_unit
+        package_total_price = (
+            requested_total_price if requested_total_price is not None else current_total_price
+        )
+        normalized_price = normalize_package_price(
+            stock_unit=item.unit,
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
+        )
         price_request = stage_price_change(
             db,
             item=item,
             actor=actor,
             price_type=price_type,
-            requested_price=requested_price,
+            requested_price=normalized_price,
             reason=price_change_reason,
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
         )
         if price_request is not None:
             price_requests.append(price_request)
@@ -549,7 +703,7 @@ def create_movement(
 def list_movements(
     item_id: int,
     limit: int = Query(default=100, ge=1, le=500),
-    _: User = Depends(all_staff),
+    _: User = Depends(inventory_roles),
     db: Session = Depends(get_db),
 ) -> list[StockMovement]:
     get_item_or_404(db, item_id)
@@ -572,13 +726,33 @@ def request_price_change(
     db: Session = Depends(get_db),
 ) -> PriceChangeRequest:
     item = get_item_or_404(db, item_id, lock=True)
+    requested_price = payload.requested_price
+    package_quantity = payload.package_quantity
+    package_unit = payload.package_unit
+    package_total_price = payload.package_total_price
+    package_values = (package_quantity, package_unit, package_total_price)
+    if any(value is not None for value in package_values):
+        if not all(value is not None for value in package_values):
+            raise HTTPException(
+                status_code=422,
+                detail="Package quantity, unit, and total price must be provided together",
+            )
+        requested_price = normalize_package_price(
+            stock_unit=item.unit,
+            package_quantity=package_quantity,
+            package_unit=package_unit,
+            package_total_price=package_total_price,
+        )
     price_request = stage_price_change(
         db,
         item=item,
         actor=actor,
         price_type=payload.price_type,
-        requested_price=payload.requested_price,
+        requested_price=requested_price,
         reason=payload.reason,
+        package_quantity=package_quantity,
+        package_unit=package_unit,
+        package_total_price=package_total_price,
     )
     if price_request is None:
         raise HTTPException(status_code=409, detail="The requested price is already active")
@@ -637,7 +811,14 @@ def decide_price_request(
     price_request.decision_note = payload.note
     price_request.decided_at = datetime.now(UTC).replace(tzinfo=None)
     if price_request.status == ApprovalStatus.APPROVED:
-        apply_item_price(item, price_request.price_type, price_request.requested_price)
+        apply_item_price(
+            item,
+            price_request.price_type,
+            price_request.requested_price,
+            package_quantity=price_request.package_quantity,
+            package_unit=price_request.package_unit,
+            package_total_price=price_request.package_total_price,
+        )
     record_audit(
         db,
         actor=actor,
@@ -653,6 +834,9 @@ def decide_price_request(
             "price_type": price_request.price_type.value,
             "old_price": str(price_request.old_price),
             "new_price": str(price_request.requested_price),
+            "package_quantity": str(price_request.package_quantity) if price_request.package_quantity is not None else None,
+            "package_unit": price_request.package_unit,
+            "package_total_price": str(price_request.package_total_price) if price_request.package_total_price is not None else None,
         },
         ip_address=client_ip(request),
     )
@@ -707,7 +891,9 @@ async def upload_item_image(
 
 
 @router.get("/items/{item_id}/report")
-def item_report(item_id: int, _: User = Depends(all_staff), db: Session = Depends(get_db)) -> dict:
+def item_report(
+    item_id: int, _: User = Depends(inventory_roles), db: Session = Depends(get_db)
+) -> dict:
     item = get_item_or_404(db, item_id)
     since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=90)
     movements = list(
@@ -731,7 +917,7 @@ def item_report(item_id: int, _: User = Depends(all_staff), db: Session = Depend
         lambda: {"received": Decimal("0"), "used": Decimal("0"), "waste": Decimal("0")}
     )
     for movement in movements:
-        key = movement.created_at.date().isoformat()
+        key = business_datetime(movement.created_at).date().isoformat()
         if movement.movement_type == MovementType.RECEIVE:
             daily[key]["received"] += abs(movement.quantity)
         elif movement.movement_type == MovementType.WASTE:

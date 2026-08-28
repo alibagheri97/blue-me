@@ -26,6 +26,7 @@ from app.schemas import (
     PurchaseVoid,
 )
 from app.services.inventory_alerts import sync_auto_purchase_need
+from app.services.units import unit_factor
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
 purchase_roles = require_roles(UserRole.ROOT, UserRole.STORAGE_MANAGER)
@@ -142,7 +143,13 @@ def create_purchase(
     audit_lines: list[dict[str, str]] = []
     for index, line_payload in enumerate(payload.lines):
         item = items[line_payload.inventory_item_id]
-        stock_quantity = line_payload.quantity * line_payload.conversion_factor
+        try:
+            conversion_factor = unit_factor(item.unit, line_payload.purchase_unit)
+        except ValueError:
+            # Backward compatibility for existing custom package units whose size was
+            # explicitly supplied by older clients.
+            conversion_factor = line_payload.conversion_factor
+        stock_quantity = line_payload.quantity * conversion_factor
         if index == len(payload.lines) - 1:
             allocated = (net_adjustment - allocated_so_far).quantize(CENT)
         elif subtotal > 0:
@@ -162,6 +169,9 @@ def create_purchase(
         item.current_quantity = after
         item.average_cost = (old_value + landed_total) / after
         item.last_purchase_price = unit_cost
+        item.purchase_quantity = line_payload.quantity
+        item.purchase_unit = line_payload.purchase_unit
+        item.purchase_total_price = line_payload.line_total
 
         line = PurchaseLine(
             receipt_id=receipt.id,
@@ -169,7 +179,7 @@ def create_purchase(
             item_name=item.name,
             quantity=line_payload.quantity,
             purchase_unit=line_payload.purchase_unit,
-            conversion_factor=line_payload.conversion_factor,
+            conversion_factor=conversion_factor,
             stock_quantity=stock_quantity,
             stock_unit=item.unit,
             line_total=line_payload.line_total,

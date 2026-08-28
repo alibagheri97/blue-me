@@ -1,8 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, ChefHat, CircleDollarSign, Clock3, PackageCheck, ReceiptText, TrendingDown, TrendingUp, UsersRound } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, ArrowRight, ChefHat, CircleDollarSign, Clock3, PackageCheck, Power, ReceiptText, Route, TrendingDown, TrendingUp, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
-import { dateTime, money, quantity, statusLabel } from "../lib/format";
+import { businessHour, dateTime, money, quantity, statusLabel } from "../lib/format";
 import type { InventoryItem, Order } from "../types";
 import { Badge, EmptyState, Spinner } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
@@ -18,6 +18,7 @@ interface Dashboard {
   unread_notifications: number;
   active_users: number;
   orders_in_kitchen: number;
+  kitchen_workflow_enabled: boolean;
   sales_change_percent: string;
   recent_orders: Order[];
   low_stock_items: InventoryItem[];
@@ -25,16 +26,28 @@ interface Dashboard {
 
 export default function DashboardPage() {
   const { user, brand } = useAuth();
+  const client = useQueryClient();
   const query = useQuery({ queryKey: ["dashboard"], queryFn: () => api<Dashboard>("/dashboard"), refetchInterval: 30_000 });
+  const settingsMutation = useMutation({
+    mutationFn: (enabled: boolean) => api<{ kitchen_workflow_enabled: boolean }>("/settings", { method: "PATCH", body: { kitchen_workflow_enabled: enabled } }),
+    onSuccess: (settings) => {
+      client.setQueryData<Dashboard>(["dashboard"], (current) => current ? { ...current, kitchen_workflow_enabled: settings.kitchen_workflow_enabled, orders_in_kitchen: settings.kitchen_workflow_enabled ? current.orders_in_kitchen : 0 } : current);
+      client.invalidateQueries({ queryKey: ["dashboard"] });
+      client.invalidateQueries({ queryKey: ["system-settings"] });
+      client.invalidateQueries({ queryKey: ["orders-today"] });
+      client.invalidateQueries({ queryKey: ["kitchen-orders"] });
+    },
+  });
   if (query.isLoading) return <div className="center-loader"><Spinner /></div>;
   if (!query.data) return <EmptyState icon={<AlertTriangle />} title="داشبورد در دسترس نیست" text="اتصال سامانه را بررسی و صفحه را دوباره بارگذاری کنید." />;
   const data = query.data;
   const change = Number(data.sales_change_percent);
+  const hour = businessHour();
 
   return (
     <div className="page-stack">
       <header className="page-heading dashboard-heading">
-        <div><span className="eyebrow">نبض زنده کسب‌وکار</span><h1>{new Date().getHours() < 12 ? "صبح بخیر" : new Date().getHours() < 18 ? "وقت بخیر" : "عصر بخیر"}، {user?.full_name.split(" ")[0]}</h1><p>مهم‌ترین وضعیت‌ها و کارهای امروز {brand.business_name} را اینجا ببینید.</p></div>
+        <div><span className="eyebrow">نبض زنده کسب‌وکار</span><h1>{hour < 12 ? "صبح بخیر" : hour < 18 ? "وقت بخیر" : "عصر بخیر"}، {user?.full_name.split(" ")[0]}</h1><p>مهم‌ترین وضعیت‌ها و کارهای امروز {brand.business_name} را اینجا ببینید.</p></div>
         <div className="live-pill"><span /> زنده · به‌روزرسانی خودکار</div>
       </header>
 
@@ -57,6 +70,13 @@ export default function DashboardPage() {
       </section>
 
       {user?.role === "root" && <section className="quick-strip"><div><UsersRound size={20} /><span><strong>{quantity(data.active_users)} کاربر فعال</strong><small>نقش‌ها و دسترسی‌ها تحت کنترل‌اند</small></span></div><div><Clock3 size={20} /><span><strong>{quantity(data.pending_daily_needs + data.pending_price_approvals)} تصمیم در انتظار</strong><small>برای ادامه روان کارها، درخواست‌ها را بررسی کنید</small></span></div><Link to={data.pending_price_approvals ? "/inventory" : "/kitchen"}>بررسی درخواست‌ها <ArrowRight size={16} /></Link></section>}
+
+      {user?.role === "root" && <section className={`panel kitchen-mode-setting ${data.kitchen_workflow_enabled ? "is-enabled" : "is-disabled"}`}>
+        <div className="setting-visual"><Route /></div>
+        <div className="setting-copy"><span className="eyebrow">تنظیمات عملیات سفارش</span><h2>گردش سه‌مرحله‌ای آشپزخانه</h2><p>{data.kitchen_workflow_enabled ? "سفارش پس از ثبت وارد مراحل تأیید، آماده‌سازی و تحویل می‌شود." : "حالت آشپزخانه خاموش است؛ سفارش تازه همان لحظه پذیرفته و با وضعیت تکمیل‌شده ثبت می‌شود."}</p><small>{data.kitchen_workflow_enabled ? "با خاموش‌کردن، سفارش‌های فعال فعلی نیز تکمیل می‌شوند." : "کسر موجودی، رسید، گزارش و ثبت رویداد همچنان کاملاً فعال است."}</small></div>
+        <button type="button" className="kitchen-mode-toggle" aria-pressed={data.kitchen_workflow_enabled} disabled={settingsMutation.isPending} onClick={() => settingsMutation.mutate(!data.kitchen_workflow_enabled)}><span><i /><strong>{settingsMutation.isPending ? "در حال ذخیره…" : data.kitchen_workflow_enabled ? "فعال" : "غیرفعال"}</strong></span><Power size={18} />{data.kitchen_workflow_enabled ? "خاموش کردن حالت آشپزخانه" : "فعال کردن حالت آشپزخانه"}</button>
+        {settingsMutation.isError && <div className="form-error setting-error">ذخیره تنظیمات انجام نشد؛ دوباره تلاش کنید.</div>}
+      </section>}
     </div>
   );
 }

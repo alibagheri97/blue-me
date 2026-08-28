@@ -5,7 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
 
 fail() {
-  echo "Blue Me: $*" >&2
+  echo "Shaverma-chi: $*" >&2
   exit 1
 }
 
@@ -28,12 +28,12 @@ configure() {
   local business slug app_name tagline primary logo web_port root_username root_password
   local database_mode database_host database_port database_name database_user database_password
   local container_database_host compose_profiles mysql_root_password existing_mysql
-  read -r -p "Business name [Blue Me Demo]: " business
-  business="${business:-Blue Me Demo}"
+  read -r -p "Business name [شاورماچی]: " business
+  business="${business:-شاورماچی}"
   read -r -p "Deployment ID [$(safe_slug "$business")]: " slug
   slug="$(safe_slug "${slug:-$business}")"
-  read -r -p "Application name [Blue Me]: " app_name
-  app_name="${app_name:-Blue Me}"
+  read -r -p "Application name [Shaverma-chi]: " app_name
+  app_name="${app_name:-Shaverma-chi}"
   read -r -p "Brand tagline [مدیریت شفاف، تصمیم‌گیری هوشمند]: " tagline
   tagline="${tagline:-مدیریت شفاف، تصمیم‌گیری هوشمند}"
   read -r -p "Primary colour [#2563eb]: " primary
@@ -101,7 +101,7 @@ BRAND_TAGLINE=$tagline
 BRAND_PRIMARY_COLOR=$primary
 BRAND_LOGO_URL=$logo
 APP_LOCALE=fa
-APP_TIMEZONE=UTC
+APP_TIMEZONE=Asia/Tehran
 CURRENCY_LABEL=تومان
 APP_ENV=production
 APP_SECRET_KEY=$(random_secret 32)
@@ -170,7 +170,7 @@ case "${1:-start}" in
     else
       native_systemctl stop "$(native_service_name)"
     fi
-    echo "Blue Me services stopped. Database data and uploads were preserved."
+    echo "Shaverma-chi services stopped. Database data and uploads were preserved."
     exit 0
     ;;
   --status)
@@ -213,6 +213,6 @@ if [[ "$healthy" != 1 ]]; then
 fi
 
 echo
-echo "Blue Me is ready: http://127.0.0.1:$web_port"
+echo "Shaverma-chi is ready: http://127.0.0.1:$web_port"
 echo "The services use restart=unless-stopped and return automatically with the Docker daemon."
 echo "Use './start.sh --status' for status and './start.sh --logs' for live logs."

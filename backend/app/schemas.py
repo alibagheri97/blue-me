@@ -19,6 +19,16 @@ Username = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3,
 Password = Annotated[str, StringConstraints(min_length=8, max_length=128)]
 PositiveMoney = Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=2)]
 PositiveQuantity = Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=3)]
+PHONE_DIGIT_TRANSLATION = str.maketrans(
+    "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+    "01234567890123456789",
+)
+
+
+def normalize_phone_digits(value: object) -> object:
+    if isinstance(value, str):
+        return value.translate(PHONE_DIGIT_TRANSLATION).strip()
+    return value
 
 
 class ORMModel(BaseModel):
@@ -34,6 +44,15 @@ class PublicConfig(BaseModel):
     locale: str
     timezone: str
     currency_label: str
+
+
+class SystemSettingsRead(ORMModel):
+    kitchen_workflow_enabled: bool
+    updated_at: datetime
+
+
+class SystemSettingsUpdate(BaseModel):
+    kitchen_workflow_enabled: bool
 
 
 class LoginRequest(BaseModel):
@@ -112,7 +131,11 @@ class InventoryItemCreate(BaseModel):
         default=Decimal("0"), ge=0, max_digits=14, decimal_places=3
     )
     auto_reorder_enabled: bool = False
+    purchase_quantity: PositiveQuantity = Decimal("1")
+    purchase_unit: str | None = Field(default=None, min_length=1, max_length=32)
     purchase_price: PositiveMoney = Decimal("0")
+    selling_quantity: PositiveQuantity = Decimal("1")
+    selling_unit: str | None = Field(default=None, min_length=1, max_length=32)
     selling_price: PositiveMoney = Decimal("0")
     description: str | None = Field(default=None, max_length=5000)
 
@@ -131,7 +154,11 @@ class InventoryItemUpdate(BaseModel):
     reorder_level: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=3)
     target_stock_level: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=3)
     auto_reorder_enabled: bool | None = None
+    purchase_quantity: PositiveQuantity | None = None
+    purchase_unit: str | None = Field(default=None, min_length=1, max_length=32)
     purchase_price: PositiveMoney | None = None
+    selling_quantity: PositiveQuantity | None = None
+    selling_unit: str | None = Field(default=None, min_length=1, max_length=32)
     selling_price: PositiveMoney | None = None
     price_change_reason: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=5000)
@@ -151,11 +178,33 @@ class InventoryItemRead(ORMModel):
     average_cost: Decimal
     last_purchase_price: Decimal
     selling_price: Decimal
+    purchase_quantity: Decimal
+    purchase_unit: str
+    purchase_total_price: Decimal
+    selling_quantity: Decimal
+    selling_unit: str
+    selling_total_price: Decimal
     image_path: str | None
     description: str | None
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    category: CategoryRead | None = None
+
+
+class KitchenInventoryItemRead(ORMModel):
+    """Operational inventory data required by kitchen workflows only."""
+
+    id: int
+    sku: str
+    name: str
+    category_id: int | None
+    unit: str
+    current_quantity: Decimal
+    average_cost: Decimal
+    image_path: str | None
+    description: str | None
+    is_active: bool
     category: CategoryRead | None = None
 
 
@@ -275,6 +324,9 @@ class PurchaseVoid(BaseModel):
 class PriceRequestCreate(BaseModel):
     price_type: PriceType = PriceType.SELLING
     requested_price: PositiveMoney
+    package_quantity: PositiveQuantity | None = None
+    package_unit: str | None = Field(default=None, min_length=1, max_length=32)
+    package_total_price: PositiveMoney | None = None
     reason: str = Field(min_length=3, max_length=500)
 
 
@@ -289,6 +341,9 @@ class PriceRequestRead(ORMModel):
     price_type: PriceType
     old_price: Decimal
     requested_price: Decimal
+    package_quantity: Decimal | None
+    package_unit: str | None
+    package_total_price: Decimal | None
     reason: str
     status: ApprovalStatus
     requested_by_id: int
@@ -312,6 +367,94 @@ class CustomerRead(ORMModel):
     phone: str
     notes: str | None
     created_at: datetime
+
+
+class StaffMemberCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    phone: str | None = Field(
+        default=None, min_length=5, max_length=32, pattern=r"^[0-9+() -]+$"
+    )
+    position: str | None = Field(default=None, max_length=120)
+    user_id: int | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    is_active: bool = True
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_phone(cls, value: object) -> object:
+        return normalize_phone_digits(value)
+
+
+class StaffMemberUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=160)
+    phone: str | None = Field(
+        default=None, min_length=5, max_length=32, pattern=r"^[0-9+() -]+$"
+    )
+    position: str | None = Field(default=None, max_length=120)
+    user_id: int | None = None
+    notes: str | None = Field(default=None, max_length=500)
+    is_active: bool | None = None
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_phone(cls, value: object) -> object:
+        return normalize_phone_digits(value)
+
+
+class StaffMemberRead(ORMModel):
+    id: int
+    name: str
+    phone: str | None
+    position: str | None
+    user_id: int | None
+    notes: str | None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    user: UserBrief | None = None
+    is_current_user: bool = False
+    meal_count: int = 0
+    menu_value: Decimal = Decimal("0")
+    estimated_cost: Decimal = Decimal("0")
+    last_meal_at: datetime | None = None
+
+
+class AttendanceStaffRead(ORMModel):
+    id: int
+    name: str
+    position: str | None
+    user_id: int | None
+
+
+class AttendanceRecordRead(BaseModel):
+    id: int
+    staff_member_id: int
+    checked_in_by_id: int
+    checked_out_by_id: int | None
+    checked_in_at: datetime
+    checked_out_at: datetime | None
+    duration_minutes: int
+    is_open: bool
+    staff_member: AttendanceStaffRead
+
+
+class AttendanceStatusRead(BaseModel):
+    eligible: bool
+    is_checked_in: bool
+    staff_member: AttendanceStaffRead | None
+    current_session: AttendanceRecordRead | None
+    last_session: AttendanceRecordRead | None
+    worked_minutes_today: int
+
+
+class AttendanceOverviewRead(BaseModel):
+    date_from: date
+    date_to: date
+    present_count: int
+    check_ins_today: int
+    completed_today: int
+    worked_minutes_today: int
+    items: list[AttendanceRecordRead]
 
 
 class MenuCategoryCreate(BaseModel):
@@ -339,6 +482,7 @@ class MenuItemCreate(BaseModel):
     inventory_item_id: int | None = None
     stock_quantity_per_sale: PositiveQuantity = Decimal("1")
     description: str | None = Field(default=None, max_length=500)
+    image_path: str | None = Field(default=None, max_length=500)
     is_active: bool = True
 
 
@@ -350,6 +494,7 @@ class MenuItemUpdate(BaseModel):
     inventory_item_id: int | None = None
     stock_quantity_per_sale: PositiveQuantity | None = None
     description: str | None = Field(default=None, max_length=500)
+    image_path: str | None = Field(default=None, max_length=500)
     is_active: bool | None = None
 
 
@@ -370,6 +515,20 @@ class MenuItemRead(ORMModel):
     recipe_configured: bool = False
     is_available: bool = True
     max_available_quantity: int | None = None
+
+
+class KitchenMenuItemRead(ORMModel):
+    """Menu identity/configuration without selling prices or profit metrics."""
+
+    id: int
+    name: str
+    category: str
+    category_id: int | None
+    inventory_item_id: int | None
+    description: str | None
+    image_path: str | None
+    is_active: bool
+    recipe_configured: bool = False
 
 
 class RecipeIngredientWrite(BaseModel):
@@ -408,6 +567,28 @@ class RecipeRead(ORMModel):
     food_cost_percent: Decimal = Decimal("0")
 
 
+class KitchenRecipeIngredientRead(ORMModel):
+    id: int
+    inventory_item_id: int
+    quantity: Decimal
+    unit: str
+    inventory_item: KitchenInventoryItemRead
+
+
+class KitchenRecipeRead(ORMModel):
+    """Kitchen recipe data with ingredient cost but no selling-price derivative."""
+
+    id: int
+    menu_item_id: int
+    yield_quantity: Decimal
+    preparation_minutes: int
+    instructions: str
+    notes: str | None
+    menu_item: KitchenMenuItemRead
+    ingredients: list[KitchenRecipeIngredientRead]
+    calculated_cost: Decimal = Decimal("0")
+
+
 class OrderItemCreate(BaseModel):
     menu_item_id: int
     quantity: int = Field(ge=1, le=999)
@@ -417,6 +598,22 @@ class OrderItemCreate(BaseModel):
 class OrderCreate(BaseModel):
     customer_id: int | None = None
     customer: CustomerCreate | None = None
+    staff_member_id: int | None = None
+    discount: PositiveMoney = Decimal("0")
+    payment_method: PaymentMethod = PaymentMethod.CARD
+    notes: str | None = Field(default=None, max_length=500)
+    items: list[OrderItemCreate] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def one_account_target(self):
+        if self.staff_member_id is not None and (
+            self.customer_id is not None or self.customer is not None
+        ):
+            raise ValueError("A staff meal cannot also be assigned to a customer")
+        return self
+
+
+class OrderUpdate(BaseModel):
     discount: PositiveMoney = Decimal("0")
     payment_method: PaymentMethod = PaymentMethod.CARD
     notes: str | None = Field(default=None, max_length=500)
@@ -441,6 +638,9 @@ class OrderRead(ORMModel):
     status: OrderStatus
     customer_id: int | None
     customer_name: str
+    staff_member_id: int | None
+    staff_name: str | None
+    is_staff_meal: bool
     subtotal: Decimal
     discount: Decimal
     total: Decimal
@@ -448,7 +648,32 @@ class OrderRead(ORMModel):
     notes: str | None
     created_by_id: int
     created_at: datetime
+    updated_at: datetime
     items: list[OrderItemRead]
+
+
+class KitchenOrderItemRead(ORMModel):
+    id: int
+    menu_item_id: int
+    name: str
+    quantity: int
+    notes: str | None
+
+
+class KitchenOrderRead(ORMModel):
+    """Operational order ticket that deliberately contains no financial fields."""
+
+    id: int
+    order_number: str
+    status: OrderStatus
+    customer_name: str
+    staff_member_id: int | None
+    staff_name: str | None
+    is_staff_meal: bool
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+    items: list[KitchenOrderItemRead]
 
 
 class OrderStatusUpdate(BaseModel):
@@ -505,6 +730,7 @@ class DashboardSummary(BaseModel):
     unread_notifications: int
     active_users: int
     orders_in_kitchen: int
+    kitchen_workflow_enabled: bool
     sales_change_percent: Decimal
     recent_orders: list[OrderRead]
     low_stock_items: list[InventoryItemRead]

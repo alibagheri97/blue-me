@@ -9,7 +9,8 @@ def test_public_health_and_authentication(client: TestClient):
     assert client.get("/health").json() == {"status": "ok"}
     config = client.get("/public/config")
     assert config.status_code == 200
-    assert config.json()["app_name"] == "Blue Me"
+    assert config.json()["app_name"] == "Shaverma-chi"
+    assert config.json()["timezone"] == "Asia/Tehran"
     failed = client.post("/auth/login", json={"username": "root", "password": "wrong"})
     assert failed.status_code == 401
     assert client.get("/auth/me").status_code == 401
@@ -55,15 +56,24 @@ def test_inventory_edit_supports_unit_purchase_and_selling_prices(
             "unit": "gram",
             "reorder_level": "0",
             "target_stock_level": "0",
-            "purchase_price": "10",
-            "selling_price": "20",
+            "purchase_quantity": "5",
+            "purchase_unit": "kilogram",
+            "purchase_price": "100000",
+            "selling_quantity": "100",
+            "selling_unit": "gram",
+            "selling_price": "5000",
         },
     )
     assert created.status_code == 201, created.text
     item_id = created.json()["id"]
-    assert Decimal(created.json()["average_cost"]) == Decimal("10")
-    assert Decimal(created.json()["last_purchase_price"]) == Decimal("10")
-    assert Decimal(created.json()["selling_price"]) == Decimal("20")
+    assert Decimal(created.json()["average_cost"]) == Decimal("20")
+    assert Decimal(created.json()["last_purchase_price"]) == Decimal("20")
+    assert Decimal(created.json()["selling_price"]) == Decimal("50")
+    assert Decimal(created.json()["purchase_quantity"]) == Decimal("5")
+    assert created.json()["purchase_unit"] == "kilogram"
+    assert Decimal(created.json()["purchase_total_price"]) == Decimal("100000")
+    assert Decimal(created.json()["selling_quantity"]) == Decimal("100")
+    assert Decimal(created.json()["selling_total_price"]) == Decimal("5000")
 
     received = client.post(
         f"/inventory/items/{item_id}/movements",
@@ -71,7 +81,7 @@ def test_inventory_edit_supports_unit_purchase_and_selling_prices(
         json={
             "movement_type": "receive",
             "quantity": "100",
-            "unit_cost": "10",
+            "unit_cost": "20",
             "reason": "Opening stock for unit price test",
         },
     )
@@ -102,42 +112,52 @@ def test_inventory_edit_supports_unit_purchase_and_selling_prices(
         json={"items": [{"menu_item_id": menu_item.json()["id"], "quantity": 1}]},
     )
     assert first_order.status_code == 201, first_order.text
-    assert Decimal(first_order.json()["items"][0]["line_cost"]) == Decimal("20")
+    assert Decimal(first_order.json()["items"][0]["line_cost"]) == Decimal("40")
 
     root_edit = client.patch(
         f"/inventory/items/{item_id}",
         headers=root_headers,
         json={
-            "purchase_price": "12",
-            "selling_price": "25",
+            "purchase_quantity": "2",
+            "purchase_unit": "kilogram",
+            "purchase_price": "50000",
+            "selling_quantity": "200",
+            "selling_unit": "gram",
+            "selling_price": "12000",
             "price_change_reason": "Supplier and retail price update",
         },
     )
     assert root_edit.status_code == 200, root_edit.text
-    assert Decimal(root_edit.json()["average_cost"]) == Decimal("12")
-    assert Decimal(root_edit.json()["last_purchase_price"]) == Decimal("12")
-    assert Decimal(root_edit.json()["selling_price"]) == Decimal("25")
+    assert Decimal(root_edit.json()["average_cost"]) == Decimal("25")
+    assert Decimal(root_edit.json()["last_purchase_price"]) == Decimal("25")
+    assert Decimal(root_edit.json()["selling_price"]) == Decimal("60")
+    assert Decimal(root_edit.json()["purchase_total_price"]) == Decimal("50000")
+    assert Decimal(root_edit.json()["selling_total_price"]) == Decimal("12000")
     second_order = client.post(
         "/orders",
         headers=accounting_headers,
         json={"items": [{"menu_item_id": menu_item.json()["id"], "quantity": 1}]},
     )
     assert second_order.status_code == 201, second_order.text
-    assert Decimal(second_order.json()["items"][0]["line_cost"]) == Decimal("24")
-    assert Decimal(first_order.json()["items"][0]["line_cost"]) == Decimal("20")
+    assert Decimal(second_order.json()["items"][0]["line_cost"]) == Decimal("50")
+    assert Decimal(first_order.json()["items"][0]["line_cost"]) == Decimal("40")
 
     proposed = client.patch(
         f"/inventory/items/{item_id}",
         headers=storage_headers,
         json={
-            "purchase_price": "15",
-            "selling_price": "30",
+            "purchase_quantity": "4",
+            "purchase_unit": "kilogram",
+            "purchase_price": "120000",
+            "selling_quantity": "100",
+            "selling_unit": "gram",
+            "selling_price": "7000",
             "price_change_reason": "New supplier quotation",
         },
     )
     assert proposed.status_code == 200, proposed.text
-    assert Decimal(proposed.json()["average_cost"]) == Decimal("12")
-    assert Decimal(proposed.json()["selling_price"]) == Decimal("25")
+    assert Decimal(proposed.json()["average_cost"]) == Decimal("25")
+    assert Decimal(proposed.json()["selling_price"]) == Decimal("60")
 
     all_requests = client.get("/inventory/price-requests", headers=root_headers)
     assert all_requests.status_code == 200, all_requests.text
@@ -147,6 +167,10 @@ def test_inventory_edit_supports_unit_purchase_and_selling_prices(
         if request["item_id"] == item_id and request["status"] == "pending"
     ]
     assert {request["price_type"] for request in pending} == {"purchase", "selling"}
+    purchase_request = next(request for request in pending if request["price_type"] == "purchase")
+    assert Decimal(purchase_request["package_quantity"]) == Decimal("4")
+    assert purchase_request["package_unit"] == "kilogram"
+    assert Decimal(purchase_request["package_total_price"]) == Decimal("120000")
     for request in pending:
         decision = client.post(
             f"/inventory/price-requests/{request['id']}/decision",
@@ -156,9 +180,12 @@ def test_inventory_edit_supports_unit_purchase_and_selling_prices(
         assert decision.status_code == 200, decision.text
 
     final_item = client.get(f"/inventory/items/{item_id}", headers=root_headers)
-    assert Decimal(final_item.json()["average_cost"]) == Decimal("15")
-    assert Decimal(final_item.json()["last_purchase_price"]) == Decimal("15")
-    assert Decimal(final_item.json()["selling_price"]) == Decimal("30")
+    assert Decimal(final_item.json()["average_cost"]) == Decimal("30")
+    assert Decimal(final_item.json()["last_purchase_price"]) == Decimal("30")
+    assert Decimal(final_item.json()["selling_price"]) == Decimal("70")
+    assert Decimal(final_item.json()["purchase_quantity"]) == Decimal("4")
+    assert final_item.json()["purchase_unit"] == "kilogram"
+    assert Decimal(final_item.json()["purchase_total_price"]) == Decimal("120000")
 
 
 def test_menu_visibility_controls_accounting_sale_and_monochrome_receipt(
@@ -598,12 +625,13 @@ def test_batch_purchase_direct_sale_historic_profit_and_automatic_shopping(
         ]
         == "24.000"
     )
-    assert (
-        client.get(f"/inventory/items/{meat['id']}", headers=storage_headers).json()[
-            "current_quantity"
-        ]
-        == "5000.000"
-    )
+    meat_after_purchase = client.get(
+        f"/inventory/items/{meat['id']}", headers=storage_headers
+    ).json()
+    assert meat_after_purchase["current_quantity"] == "5000.000"
+    assert meat_after_purchase["purchase_quantity"] == "5.000"
+    assert meat_after_purchase["purchase_unit"] == "کیلوگرم"
+    assert meat_after_purchase["purchase_total_price"] == "1000000.00"
     assert (
         client.post("/purchases", headers=accounting_headers, json={}).status_code
         == 403

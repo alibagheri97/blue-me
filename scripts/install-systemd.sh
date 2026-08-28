@@ -3,10 +3,10 @@ set -Eeuo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
-[[ -f "$ENV_FILE" ]] || { echo "Blue Me: missing .env" >&2; exit 1; }
+[[ -f "$ENV_FILE" ]] || { echo "Shaverma-chi: missing .env" >&2; exit 1; }
 
 database_mode="$(sed -n 's/^DATABASE_MODE=//p' "$ENV_FILE" | tail -n 1)"
-[[ "$database_mode" == "external" ]] || { echo "Blue Me: native systemd mode requires DATABASE_MODE=external" >&2; exit 1; }
+[[ "$database_mode" == "external" ]] || { echo "Shaverma-chi: native systemd mode requires DATABASE_MODE=external" >&2; exit 1; }
 database_host="$(sed -n 's/^DATABASE_HOST=//p' "$ENV_FILE" | tail -n 1)"
 if [[ "$database_host" == "localhost" || "$database_host" == "127.0.0.1" ]]; then
   database_unit=""
@@ -16,13 +16,13 @@ if [[ "$database_host" == "localhost" || "$database_host" == "127.0.0.1" ]]; the
       break
     fi
   done
-  [[ -n "$database_unit" ]] || { echo "Blue Me: no local MySQL/MariaDB systemd service was found" >&2; exit 1; }
+  [[ -n "$database_unit" ]] || { echo "Shaverma-chi: no local MySQL/MariaDB systemd service was found" >&2; exit 1; }
   echo "Enabling and starting local database service ($database_unit)…"
   systemctl enable --now "$database_unit"
 fi
-command -v python3 >/dev/null 2>&1 || { echo "Blue Me: python3 is required" >&2; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "Blue Me: Node.js and npm are required" >&2; exit 1; }
-command -v curl >/dev/null 2>&1 || { echo "Blue Me: curl is required" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "Shaverma-chi: python3 is required" >&2; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo "Shaverma-chi: Node.js and npm are required" >&2; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "Shaverma-chi: curl is required" >&2; exit 1; }
 
 deploy_id="$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$ENV_FILE" | tail -n 1)"
 deploy_id="${deploy_id:-blue-me-local}"
@@ -52,7 +52,7 @@ echo "Applying database migrations and creating the root account…"
 )
 
 unit_header="[Unit]
-Description=Blue Me business management ($deploy_id)
+Description=Shaverma-chi business management ($deploy_id)
 After=network-online.target mariadb.service mysqld.service mysql.service
 Wants=network-online.target
 
@@ -111,7 +111,7 @@ fi
 echo "Waiting for $service_name…"
 for attempt in $(seq 1 45); do
   if curl --fail --silent --max-time 3 "http://127.0.0.1:$web_port/api/ready" >/dev/null 2>&1; then
-    echo "Blue Me is ready: http://127.0.0.1:$web_port"
+    echo "Shaverma-chi is ready: http://127.0.0.1:$web_port"
     exit 0
   fi
   sleep 2
@@ -119,5 +119,5 @@ done
 
 "${systemctl_command[@]}" status "$service_name" --no-pager || true
 "${journal_command[@]}" -n 80 --no-pager || true
-echo "Blue Me: service did not become healthy" >&2
+echo "Shaverma-chi: service did not become healthy" >&2
 exit 1

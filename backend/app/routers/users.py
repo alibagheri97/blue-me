@@ -6,11 +6,18 @@ from app.audit import record_audit
 from app.core.security import hash_password
 from app.db import get_db
 from app.deps import client_ip, require_roles
-from app.models import User, UserRole
+from app.models import StaffMember, User, UserRole
 from app.schemas import UserCreate, UserRead, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
 root_only = require_roles(UserRole.ROOT)
+role_positions = {
+    UserRole.ROOT: "مدیر کل",
+    UserRole.STORAGE_MANAGER: "مدیر انبار",
+    UserRole.ACCOUNTING_MANAGER: "مدیر حسابداری",
+    UserRole.SALES_MANAGER: "مدیر فروش",
+    UserRole.KITCHEN_MANAGER: "مدیر آشپزخانه",
+}
 
 
 @router.get("", response_model=list[UserRead])
@@ -45,6 +52,15 @@ def create_user(
     )
     db.add(user)
     db.flush()
+    staff_member = StaffMember(
+        name=user.full_name,
+        position=role_positions[user.role],
+        user_id=user.id,
+        is_active=user.is_active,
+        notes="ایجاد خودکار از حساب کاربری سامانه",
+    )
+    db.add(staff_member)
+    db.flush()
     record_audit(
         db,
         actor=actor,
@@ -53,7 +69,11 @@ def create_user(
         entity_type="user",
         entity_id=user.id,
         summary=f"Created {payload.role.value} account {payload.username}",
-        details={"role": payload.role.value, "full_name": payload.full_name},
+        details={
+            "role": payload.role.value,
+            "full_name": payload.full_name,
+            "staff_member_id": staff_member.id,
+        },
         ip_address=client_ip(request),
     )
     db.commit()
@@ -82,6 +102,15 @@ def update_user(
         changes["password"] = "changed"
     if user.id == actor.id and payload.is_active is False:
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    staff_member = db.scalar(
+        select(StaffMember).where(StaffMember.user_id == user.id)
+    )
+    if staff_member is None:
+        staff_member = StaffMember(user_id=user.id, name=user.full_name)
+        db.add(staff_member)
+    staff_member.name = user.full_name
+    staff_member.position = role_positions[user.role]
+    staff_member.is_active = user.is_active
     record_audit(
         db,
         actor=actor,

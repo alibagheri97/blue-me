@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.audit import record_audit
@@ -13,12 +13,25 @@ from app.models import (
     DailyNeed,
     InventoryItem,
     MenuItem,
+    Order,
+    OrderStatus,
     Recipe,
     RecipeIngredient,
     User,
     UserRole,
 )
-from app.schemas import ApprovalDecision, DailyNeedCreate, DailyNeedRead, RecipeRead, RecipeUpsert
+from app.schemas import (
+    ApprovalDecision,
+    DailyNeedCreate,
+    DailyNeedRead,
+    KitchenInventoryItemRead,
+    KitchenMenuItemRead,
+    KitchenOrderRead,
+    KitchenRecipeIngredientRead,
+    KitchenRecipeRead,
+    RecipeUpsert,
+)
+from app.services.business_time import business_today
 
 router = APIRouter(prefix="/kitchen", tags=["kitchen"])
 kitchen_roles = require_roles(UserRole.ROOT, UserRole.KITCHEN_MANAGER)
@@ -35,17 +48,50 @@ def recipe_query():
     )
 
 
-def serialize_recipe(recipe: Recipe) -> RecipeRead:
+def serialize_kitchen_menu_item(item: MenuItem) -> KitchenMenuItemRead:
+    return KitchenMenuItemRead(
+        id=item.id,
+        name=item.name,
+        category=item.menu_category.name if item.menu_category else item.category,
+        category_id=item.category_id,
+        inventory_item_id=item.inventory_item_id,
+        description=item.description,
+        image_path=item.image_path,
+        is_active=item.is_active,
+        recipe_configured=(
+            item.inventory_item_id is not None
+            or (item.recipe is not None and bool(item.recipe.ingredients))
+        ),
+    )
+
+
+def serialize_recipe(recipe: Recipe) -> KitchenRecipeRead:
     cost = sum(
         (ingredient.quantity * ingredient.inventory_item.average_cost for ingredient in recipe.ingredients),
         Decimal("0"),
     ) / recipe.yield_quantity
-    price = recipe.menu_item.selling_price
-    percent = (cost / price * 100) if price > 0 else Decimal("0")
-    result = RecipeRead.model_validate(recipe)
-    result.calculated_cost = cost.quantize(Decimal("0.01"))
-    result.food_cost_percent = percent.quantize(Decimal("0.01"))
-    return result
+    return KitchenRecipeRead(
+        id=recipe.id,
+        menu_item_id=recipe.menu_item_id,
+        yield_quantity=recipe.yield_quantity,
+        preparation_minutes=recipe.preparation_minutes,
+        instructions=recipe.instructions,
+        notes=recipe.notes,
+        menu_item=serialize_kitchen_menu_item(recipe.menu_item),
+        ingredients=[
+            KitchenRecipeIngredientRead(
+                id=ingredient.id,
+                inventory_item_id=ingredient.inventory_item_id,
+                quantity=ingredient.quantity,
+                unit=ingredient.unit,
+                inventory_item=KitchenInventoryItemRead.model_validate(
+                    ingredient.inventory_item
+                ),
+            )
+            for ingredient in recipe.ingredients
+        ],
+        calculated_cost=cost.quantize(Decimal("0.01")),
+    )
 
 
 def validate_ingredients(db: Session, payload: RecipeUpsert) -> None:
@@ -69,19 +115,83 @@ def validate_ingredients(db: Session, payload: RecipeUpsert) -> None:
         )
 
 
-@router.get("/recipes", response_model=list[RecipeRead])
-def list_recipes(_: User = Depends(kitchen_roles), db: Session = Depends(get_db)) -> list[RecipeRead]:
+@router.get("/menu-items", response_model=list[KitchenMenuItemRead])
+def list_kitchen_menu_items(
+    active: bool | None = None,
+    search: str | None = Query(default=None, max_length=100),
+    _: User = Depends(kitchen_roles),
+    db: Session = Depends(get_db),
+) -> list[KitchenMenuItemRead]:
+    query = select(MenuItem).options(
+        selectinload(MenuItem.menu_category),
+        selectinload(MenuItem.recipe).selectinload(Recipe.ingredients),
+    )
+    if active is not None:
+        query = query.where(MenuItem.is_active == active)
+    if search:
+        term = f"%{search.strip()}%"
+        query = query.where(
+            or_(MenuItem.name.ilike(term), MenuItem.category.ilike(term))
+        )
+    items = db.scalars(query.order_by(MenuItem.category, MenuItem.name)).unique()
+    return [serialize_kitchen_menu_item(item) for item in items]
+
+
+@router.get("/inventory-items", response_model=list[KitchenInventoryItemRead])
+def list_kitchen_inventory_items(
+    search: str | None = Query(default=None, max_length=160),
+    _: User = Depends(kitchen_roles),
+    db: Session = Depends(get_db),
+) -> list[KitchenInventoryItemRead]:
+    query = (
+        select(InventoryItem)
+        .options(selectinload(InventoryItem.category))
+        .where(InventoryItem.is_active.is_(True))
+    )
+    if search:
+        term = f"%{search.strip()}%"
+        query = query.where(
+            or_(InventoryItem.name.ilike(term), InventoryItem.sku.ilike(term))
+        )
+    items = db.scalars(query.order_by(InventoryItem.name).limit(500))
+    return [KitchenInventoryItemRead.model_validate(item) for item in items]
+
+
+@router.get("/orders", response_model=list[KitchenOrderRead])
+def list_kitchen_orders(
+    _: User = Depends(kitchen_roles), db: Session = Depends(get_db)
+) -> list[KitchenOrderRead]:
+    orders = db.scalars(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(
+            Order.status.in_(
+                [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY]
+            )
+        )
+        .order_by(Order.created_at)
+        .limit(300)
+    ).unique()
+    return [KitchenOrderRead.model_validate(order) for order in orders]
+
+
+@router.get("/recipes", response_model=list[KitchenRecipeRead])
+def list_recipes(
+    _: User = Depends(kitchen_roles), db: Session = Depends(get_db)
+) -> list[KitchenRecipeRead]:
     recipes = list(db.scalars(recipe_query().order_by(Recipe.updated_at.desc())).unique())
     return [serialize_recipe(recipe) for recipe in recipes]
 
 
-@router.post("/recipes", response_model=RecipeRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/recipes", response_model=KitchenRecipeRead, status_code=status.HTTP_201_CREATED
+)
 def create_recipe(
     payload: RecipeUpsert,
     request: Request,
     actor: User = Depends(kitchen_roles),
     db: Session = Depends(get_db),
-) -> RecipeRead:
+) -> KitchenRecipeRead:
     menu_item = db.get(MenuItem, payload.menu_item_id)
     if menu_item is None:
         raise HTTPException(status_code=404, detail="Menu item not found")
@@ -122,14 +232,14 @@ def create_recipe(
     return serialize_recipe(recipe)
 
 
-@router.put("/recipes/{recipe_id}", response_model=RecipeRead)
+@router.put("/recipes/{recipe_id}", response_model=KitchenRecipeRead)
 def update_recipe(
     recipe_id: int,
     payload: RecipeUpsert,
     request: Request,
     actor: User = Depends(kitchen_roles),
     db: Session = Depends(get_db),
-) -> RecipeRead:
+) -> KitchenRecipeRead:
     recipe = db.scalar(recipe_query().where(Recipe.id == recipe_id))
     if recipe is None:
         raise HTTPException(status_code=404, detail="Recipe not found")
@@ -207,7 +317,7 @@ def list_daily_needs(
     if required_date:
         query = query.where(DailyNeed.required_date == required_date)
     else:
-        query = query.where(DailyNeed.required_date >= date.today() - timedelta(days=7))
+        query = query.where(DailyNeed.required_date >= business_today() - timedelta(days=7))
     if approval_status:
         query = query.where(DailyNeed.status == approval_status)
     return list(db.scalars(query.order_by(DailyNeed.required_date, DailyNeed.created_at.desc())))
@@ -220,7 +330,7 @@ def create_daily_need(
     actor: User = Depends(kitchen_roles),
     db: Session = Depends(get_db),
 ) -> DailyNeed:
-    if payload.required_date < date.today():
+    if payload.required_date < business_today():
         raise HTTPException(status_code=422, detail="Required date cannot be in the past")
     if payload.inventory_item_id is not None:
         inventory_item = db.get(InventoryItem, payload.inventory_item_id)

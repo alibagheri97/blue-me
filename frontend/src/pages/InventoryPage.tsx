@@ -6,10 +6,11 @@ import { Badge, Button, EmptyState, Modal, Spinner } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, api, assetUrl } from "../lib/api";
 import { dateTime, money, quantity, statusLabel } from "../lib/format";
+import { normalizedUnitPrice, unitChoices } from "../lib/units";
 import type { Category, InventoryItem, User } from "../types";
 
 interface ItemPage { items: InventoryItem[]; total: number; page: number; page_size: number }
-interface PriceRequest { id: number; item_id: number; price_type: "purchase" | "selling"; old_price: string; requested_price: string; reason: string; status: "pending" | "approved" | "rejected" | "cancelled"; requested_by: User; created_at: string; item: InventoryItem; decision_note: string | null }
+interface PriceRequest { id: number; item_id: number; price_type: "purchase" | "selling"; old_price: string; requested_price: string; package_quantity: string | null; package_unit: string | null; package_total_price: string | null; reason: string; status: "pending" | "approved" | "rejected" | "cancelled"; requested_by: User; created_at: string; item: InventoryItem; decision_note: string | null }
 interface Movement { id: number; movement_type: string; quantity: string; unit_cost: string | null; quantity_before: string; quantity_after: string; reason: string; created_at: string }
 interface ItemReport { stock_value: string; units_used_90d: string; average_daily_use: string; estimated_days_remaining: string | null; daily_activity: Array<{ date: string; received: string; used: string; waste: string }>; price_history: Array<{ date: string; price_type: "purchase" | "selling"; old_price: string; new_price: string }> }
 
@@ -22,14 +23,35 @@ export default function InventoryPage() {
   const [lowStock, setLowStock] = useState(false);
   const [itemForm, setItemForm] = useState<InventoryItem | "new" | null>(null);
   const [formUnit, setFormUnit] = useState("عدد");
+  const [purchaseQuantity, setPurchaseQuantity] = useState("1");
+  const [purchaseUnit, setPurchaseUnit] = useState("عدد");
+  const [purchasePrice, setPurchasePrice] = useState("0");
+  const [sellingQuantity, setSellingQuantity] = useState("1");
+  const [sellingUnit, setSellingUnit] = useState("عدد");
+  const [sellingPrice, setSellingPrice] = useState("0");
   const [movementItem, setMovementItem] = useState<InventoryItem | null>(null);
   const [detailItem, setDetailItem] = useState<InventoryItem | null>(null);
   const [categoryModal, setCategoryModal] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (itemForm === "new") setFormUnit("عدد");
-    else if (itemForm) setFormUnit(itemForm.unit);
+    if (itemForm === "new") {
+      setFormUnit("عدد");
+      setPurchaseQuantity("1");
+      setPurchaseUnit("عدد");
+      setPurchasePrice("0");
+      setSellingQuantity("1");
+      setSellingUnit("عدد");
+      setSellingPrice("0");
+    } else if (itemForm) {
+      setFormUnit(itemForm.unit);
+      setPurchaseQuantity(itemForm.purchase_quantity || "1");
+      setPurchaseUnit(itemForm.purchase_unit || itemForm.unit);
+      setPurchasePrice(itemForm.purchase_total_price || itemForm.last_purchase_price || "0");
+      setSellingQuantity(itemForm.selling_quantity || "1");
+      setSellingUnit(itemForm.selling_unit || itemForm.unit);
+      setSellingPrice(itemForm.selling_total_price || itemForm.selling_price || "0");
+    }
   }, [itemForm]);
 
   const params = new URLSearchParams({ page_size: "100", active: "true" });
@@ -55,7 +77,8 @@ export default function InventoryPage() {
     const body: Record<string, unknown> = {
       sku: form.get("sku"), name: form.get("name"), category_id: form.get("category_id") ? Number(form.get("category_id")) : null,
       unit: form.get("unit"), reorder_level: form.get("reorder_level"), target_stock_level: form.get("target_stock_level"), auto_reorder_enabled: form.get("auto_reorder_enabled") === "on", description: form.get("description") || null,
-      purchase_price: form.get("purchase_price") || 0, selling_price: form.get("selling_price") || 0,
+      purchase_quantity: purchaseQuantity, purchase_unit: purchaseUnit, purchase_price: purchasePrice || 0,
+      selling_quantity: sellingQuantity, selling_unit: sellingUnit, selling_price: sellingPrice || 0,
     };
     if (itemForm !== "new") body.price_change_reason = form.get("price_change_reason") || null;
     mutation.mutate({ path: itemForm === "new" ? "/inventory/items" : `/inventory/items/${itemForm!.id}`, method: itemForm === "new" ? "POST" : "PATCH", body });
@@ -70,6 +93,14 @@ export default function InventoryPage() {
 
   const decide = (id: number, status: "approved" | "rejected") => mutation.mutate({ path: `/inventory/price-requests/${id}/decision`, method: "POST", body: { status } });
   const pricingUnit = formUnit.trim() || "واحد پایه";
+  const purchaseUnitPrice = normalizedUnitPrice(purchasePrice, purchaseQuantity, purchaseUnit, pricingUnit);
+  const sellingUnitPrice = normalizedUnitPrice(sellingPrice, sellingQuantity, sellingUnit, pricingUnit);
+  const changeBaseUnit = (nextUnit: string) => {
+    setFormUnit(nextUnit);
+    const choices = unitChoices(nextUnit);
+    if (!choices.includes(purchaseUnit)) setPurchaseUnit(nextUnit);
+    if (!choices.includes(sellingUnit)) setSellingUnit(nextUnit);
+  };
 
   return (
     <div className="page-stack">
@@ -87,13 +118,13 @@ export default function InventoryPage() {
           {items.isLoading ? <div className="center-loader"><Spinner /></div> : items.data?.items.length ? <div className="inventory-grid">{items.data.items.map((item) => { const isLow = Number(item.current_quantity) <= Number(item.reorder_level); return <article className="inventory-card" key={item.id}>
             <button className="item-image" onClick={() => setDetailItem(item)}>{assetUrl(item.image_path) ? <img src={assetUrl(item.image_path)} alt="" /> : <PackageOpen size={30} />}{isLow && <Badge tone="danger">موجودی کم</Badge>}{item.auto_reorder_enabled && <Badge tone="info">خرید خودکار</Badge>}</button>
             <div className="item-card-body"><div className="item-title"><span style={{ background: item.category?.color || "#94a3b8" }} /><div><h3>{item.name}</h3><small>{item.sku} · {item.category?.name || "بدون دسته‌بندی"}</small></div><button className="icon-button" onClick={() => setDetailItem(item)}><MoreHorizontal size={19} /></button></div>
-            <div className="item-quantities"><span><small>موجودی</small><strong>{quantity(item.current_quantity)} <i>{item.unit}</i></strong></span><span><small>خرید هر {item.unit}</small><strong>{money(item.average_cost)}</strong></span><span><small>فروش هر {item.unit}</small><strong>{money(item.selling_price)}</strong></span></div>
+            <div className="item-quantities"><span><small>موجودی</small><strong>{quantity(item.current_quantity)} <i>{item.unit}</i></strong></span><span><small>آخرین خرید</small><strong>{quantity(item.purchase_quantity)} {item.purchase_unit}</strong><em>{money(item.purchase_total_price)}</em></span><span><small>قیمت فروش</small><strong>{quantity(item.selling_quantity)} {item.selling_unit}</strong><em>{money(item.selling_total_price)}</em></span></div>
             <div className="item-actions"><button onClick={() => { setError(""); setMovementItem(item); }}><ArrowDownToLine size={16} /> موجودی</button><button onClick={() => { setError(""); setItemForm(item); }}><CircleDollarSign size={16} /> قیمت</button><button onClick={() => { setError(""); setItemForm(item); }}>ویرایش <ChevronRight size={15} /></button></div></div>
           </article>; })}</div> : <EmptyState icon={<PackageOpen />} title="کالایی پیدا نشد" text="اولین کالا را بسازید یا فیلترها را تغییر دهید." />}
         </section>
       </> : <section className="panel approvals-panel">
         <header className="panel-header"><div><h2>کنترل تغییر قیمت</h2><p>هر پیشنهاد مدیر انبار تا زمان تصمیم مدیر کل، دقیق و قابل پیگیری می‌ماند.</p></div></header>
-        {approvals.isLoading ? <div className="center-loader"><Spinner /></div> : approvals.data?.length ? <div className="approval-list">{approvals.data.map((request) => <article key={request.id} className="approval-row"><div className="approval-product"><div className="mini-product">{request.item.image_path ? <img src={assetUrl(request.item.image_path)} alt="" /> : <CircleDollarSign />}</div><div><strong>{request.item.name}</strong><small>{request.price_type === "purchase" ? "قیمت خرید" : "قیمت فروش"} هر {request.item.unit} · درخواست {request.requested_by.full_name}</small></div></div><div className="price-delta"><span><small>قیمت فعلی هر {request.item.unit}</small>{money(request.old_price)}</span><ArrowDownToLine size={18} /><span><small>قیمت پیشنهادی</small><strong>{money(request.requested_price)}</strong></span></div><div className="approval-reason"><small>دلیل تغییر</small><span>{request.reason}</span><small>{dateTime(request.created_at)}</small></div><Badge tone={request.status === "approved" ? "success" : request.status === "rejected" || request.status === "cancelled" ? "danger" : "warning"}>{statusLabel[request.status]}</Badge>{request.status === "pending" && user?.role === "root" && <div className="approval-actions"><button className="approve" title="تأیید" onClick={() => decide(request.id, "approved")}><Check size={17} /></button><button className="reject" title="رد" onClick={() => decide(request.id, "rejected")}><X size={17} /></button></div>}</article>)}</div> : <EmptyState icon={<Check />} title="درخواست قیمتی وجود ندارد" text="در حال حاضر پیشنهاد قیمتی برای بررسی ثبت نشده است." />}
+        {approvals.isLoading ? <div className="center-loader"><Spinner /></div> : approvals.data?.length ? <div className="approval-list">{approvals.data.map((request) => <article key={request.id} className="approval-row"><div className="approval-product"><div className="mini-product">{request.item.image_path ? <img src={assetUrl(request.item.image_path)} alt="" /> : <CircleDollarSign />}</div><div><strong>{request.item.name}</strong><small>{request.price_type === "purchase" ? "قیمت خرید" : "قیمت فروش"} · درخواست {request.requested_by.full_name}</small></div></div><div className="price-delta"><span><small>قیمت فعلی هر {request.item.unit}</small>{money(request.old_price)}</span><ArrowDownToLine size={18} /><span><small>پیشنهاد جدید</small><strong>{request.package_total_price !== null ? `${money(request.package_total_price)} برای ${quantity(request.package_quantity)} ${request.package_unit}` : `${money(request.requested_price)} برای هر ${request.item.unit}`}</strong></span></div><div className="approval-reason"><small>دلیل تغییر</small><span>{request.reason}</span><small>{dateTime(request.created_at)}</small></div><Badge tone={request.status === "approved" ? "success" : request.status === "rejected" || request.status === "cancelled" ? "danger" : "warning"}>{statusLabel[request.status]}</Badge>{request.status === "pending" && user?.role === "root" && <div className="approval-actions"><button className="approve" title="تأیید" onClick={() => decide(request.id, "approved")}><Check size={17} /></button><button className="reject" title="رد" onClick={() => decide(request.id, "rejected")}><X size={17} /></button></div>}</article>)}</div> : <EmptyState icon={<Check />} title="درخواست قیمتی وجود ندارد" text="در حال حاضر پیشنهاد قیمتی برای بررسی ثبت نشده است." />}
       </section>}
 
       <Modal open={itemForm !== null} title={itemForm === "new" ? "ایجاد کالای انبار" : "ویرایش کالای انبار"} onClose={() => setItemForm(null)} wide>
@@ -101,15 +132,15 @@ export default function InventoryPage() {
           <label className="field"><span>نام کالا</span><input name="name" required defaultValue={itemForm !== "new" && itemForm ? itemForm.name : ""} /></label>
           <label className="field"><span>کد کالا</span><input name="sku" required defaultValue={itemForm !== "new" && itemForm ? itemForm.sku : ""} /></label>
           <label className="field"><span>دسته‌بندی</span><select name="category_id" defaultValue={itemForm !== "new" && itemForm ? itemForm.category_id || "" : ""}><option value="">بدون دسته‌بندی</option>{categories.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label className="field"><span>واحد اندازه‌گیری</span><input name="unit" required value={formUnit} onChange={(event) => setFormUnit(event.target.value)} placeholder="کیلوگرم، گرم، بطری…" /></label>
+          <label className="field"><span>واحد پایه موجودی</span><select name="unit" required value={formUnit} onChange={(event) => changeBaseUnit(event.target.value)}>{!["عدد", "گرم", "میلی‌لیتر"].includes(formUnit) && <option value={formUnit}>{formUnit}</option>}<option value="عدد">عدد</option><option value="گرم">گرم</option><option value="میلی‌لیتر">میلی‌لیتر</option></select><small>موجودی و دستور پخت با این واحد محاسبه می‌شوند</small></label>
           <label className="field"><span>نقطه سفارش مجدد</span><input name="reorder_level" type="number" min="0" step="0.001" required defaultValue={itemForm !== "new" && itemForm ? itemForm.reorder_level : "0"} /></label>
           <label className="field"><span>موجودی هدف پس از خرید</span><input name="target_stock_level" type="number" min="0" step="0.001" required defaultValue={itemForm !== "new" && itemForm ? itemForm.target_stock_level : "0"} /><small>برای پیشنهاد مقدار خرید فردا</small></label>
           <label className="field toggle-field field-wide"><input name="auto_reorder_enabled" type="checkbox" defaultChecked={itemForm !== "new" && itemForm ? itemForm.auto_reorder_enabled : false} /><span>ساخت خودکار هشدار و ردیف خرید فردا هنگام رسیدن به حد سفارش</span></label>
-          <section className="pricing-editor field-wide">
-            <header><div><span className="pricing-kicker">قیمت‌گذاری واحد پایه</span><h3>قیمت خرید و فروش</h3><p>تمام قیمت‌ها به تومان و برای هر «{pricingUnit}» ثبت می‌شوند.</p></div><span className="unit-pill">هر {pricingUnit}</span></header>
-            <div className="pricing-fields">
-              <label className="field"><span>قیمت خرید هر {pricingUnit}</span><input name="purchase_price" type="number" min="0" step="0.01" required defaultValue={itemForm !== "new" && itemForm ? itemForm.average_cost : "0"} /><small>مبنای ارزش فعلی انبار و بهای تمام‌شده سفارش‌های بعدی</small></label>
-              <label className="field"><span>قیمت فروش هر {pricingUnit}</span><input name="selling_price" type="number" min="0" step="0.01" required defaultValue={itemForm !== "new" && itemForm ? itemForm.selling_price : "0"} /><small>قیمت فروش مستقیم همین واحد از کالا</small></label>
+          <section className="pricing-editor simple-pricing-editor field-wide">
+            <header><div><span className="pricing-kicker">ساده و دقیق</span><h3>قیمت خرید و فروش</h3><p>فقط همان مقدار، واحد و مبلغی را بنویسید که روی فاکتور یا فروش دارید.</p></div><span className="unit-pill">واحد انبار: {pricingUnit}</span></header>
+            <div className="simple-pricing-grid">
+              <article className="price-package-card purchase-package-card"><header><span>خرید</span><small>مثلاً ۵ کیلوگرم گوشت با مبلغ کل فاکتور</small></header><div className="price-sentence"><input aria-label="مقدار خرید" value={purchaseQuantity} onChange={(event) => setPurchaseQuantity(event.target.value)} type="number" min="0.001" step="0.001" required /><select aria-label="واحد خرید" value={purchaseUnit} onChange={(event) => setPurchaseUnit(event.target.value)}>{unitChoices(pricingUnit).map((unit) => <option key={unit}>{unit}</option>)}</select><span>به مبلغ</span><input aria-label="مبلغ خرید" value={purchasePrice} onChange={(event) => setPurchasePrice(event.target.value)} type="number" min="0" step="1" required /><b>تومان</b></div><small className="normalized-price">معادل هر {pricingUnit}: <strong>{money(purchaseUnitPrice)}</strong></small></article>
+              <article className="price-package-card selling-package-card"><header><span>فروش</span><small>مقدار قابل فروش و مبلغ آن را وارد کنید</small></header><div className="price-sentence"><input aria-label="مقدار فروش" value={sellingQuantity} onChange={(event) => setSellingQuantity(event.target.value)} type="number" min="0.001" step="0.001" required /><select aria-label="واحد فروش" value={sellingUnit} onChange={(event) => setSellingUnit(event.target.value)}>{unitChoices(pricingUnit).map((unit) => <option key={unit}>{unit}</option>)}</select><span>به مبلغ</span><input aria-label="مبلغ فروش" value={sellingPrice} onChange={(event) => setSellingPrice(event.target.value)} type="number" min="0" step="1" required /><b>تومان</b></div><small className="normalized-price">معادل هر {pricingUnit}: <strong>{money(sellingUnitPrice)}</strong></small></article>
               {itemForm !== "new" && <label className="field field-wide"><span>دلیل تغییر قیمت <small>{user?.role === "root" ? "(اختیاری)" : "(برای تأیید مدیر کل الزامی)"}</small></span><textarea name="price_change_reason" rows={2} placeholder="مثلاً تغییر قیمت تأمین‌کننده یا اصلاح قیمت‌گذاری" /></label>}
             </div>
             <div className="pricing-note"><CircleDollarSign size={18} /><span>{user?.role === "storage_manager" ? "اطلاعات کالا فوراً ذخیره می‌شود؛ تغییر قیمت خرید و فروش پس از تأیید مدیر کل اعمال خواهد شد." : "تغییر قیمت خرید، موجودی فعلی را ارزش‌گذاری مجدد می‌کند و روی سفارش‌های آینده اثر می‌گذارد؛ سوابق گذشته تغییر نمی‌کنند."}</span></div>

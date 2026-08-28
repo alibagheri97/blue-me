@@ -14,7 +14,7 @@ services:
       MYSQL_USER: ${DATABASE_USER}
       MYSQL_PASSWORD: ${DATABASE_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      TZ: ${APP_TIMEZONE:-UTC}
+      TZ: ${APP_TIMEZONE:-Asia/Tehran}
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

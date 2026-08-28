@@ -1,7 +1,7 @@
 # Menu image credits
 
 These menu-card images were downloaded, cropped, resized to 720 x 480, sharpened,
-and converted to WebP for Blue Me. Product names and trademarks remain the
+and converted to WebP for Shaverma-chi. Product names and trademarks remain the
 property of their respective owners.
 
 ## Pexels images

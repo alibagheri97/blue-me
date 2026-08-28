@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -15,6 +15,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.services.business_time import business_today
 
 
 def _now() -> datetime:
@@ -63,7 +64,7 @@ def sync_auto_purchase_need(
     supply_received: bool = False,
 ) -> DailyNeed | None:
     """Keep tomorrow's automatic purchase need aligned with the locked stock row."""
-    tomorrow = date.today() + timedelta(days=1)
+    tomorrow = business_today() + timedelta(days=1)
     existing = db.scalar(
         select(DailyNeed)
         .where(
