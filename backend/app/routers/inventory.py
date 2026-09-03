@@ -37,11 +37,14 @@ from app.schemas import (
     PriceRequestRead,
 )
 from app.services.inventory_alerts import sync_auto_purchase_need
-from app.services.business_time import business_datetime
+from app.services.business_time import business_date
 from app.services.units import unit_price
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 inventory_roles = require_roles(UserRole.ROOT, UserRole.STORAGE_MANAGER)
+inventory_intake_roles = require_roles(
+    UserRole.ROOT, UserRole.STORAGE_MANAGER, UserRole.ACCOUNTING_MANAGER
+)
 inventory_view_roles = require_roles(
     UserRole.ROOT,
     UserRole.STORAGE_MANAGER,
@@ -273,7 +276,7 @@ def audit_price_change(
 
 @router.get("/categories", response_model=list[CategoryRead])
 def list_categories(
-    _: User = Depends(inventory_roles), db: Session = Depends(get_db)
+    _: User = Depends(inventory_intake_roles), db: Session = Depends(get_db)
 ) -> list[Category]:
     return list(db.scalars(select(Category).order_by(Category.name)))
 
@@ -401,7 +404,7 @@ def list_items(
 def create_item(
     payload: InventoryItemCreate,
     request: Request,
-    actor: User = Depends(inventory_roles),
+    actor: User = Depends(inventory_intake_roles),
     db: Session = Depends(get_db),
 ) -> InventoryItem:
     if db.scalar(select(InventoryItem.id).where(InventoryItem.sku == payload.sku)):
@@ -917,7 +920,7 @@ def item_report(
         lambda: {"received": Decimal("0"), "used": Decimal("0"), "waste": Decimal("0")}
     )
     for movement in movements:
-        key = business_datetime(movement.created_at).date().isoformat()
+        key = business_date(movement.created_at).isoformat()
         if movement.movement_type == MovementType.RECEIVE:
             daily[key]["received"] += abs(movement.quantity)
         elif movement.movement_type == MovementType.WASTE:

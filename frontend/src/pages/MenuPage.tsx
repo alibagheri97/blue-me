@@ -7,6 +7,7 @@ import {
   Layers3,
   Link2,
   PackageCheck,
+  PackageOpen,
   Pencil,
   Plus,
   Search,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { RecipeEditor } from "../components/RecipeEditor";
+import { TakeawaySupplyManager } from "../components/TakeawaySupplyManager";
 import { Badge, Button, EmptyState, Modal, Spinner } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, api } from "../lib/api";
@@ -29,12 +31,14 @@ export default function MenuPage() {
   const [status, setStatus] = useState<"all" | "ready" | "draft" | "inactive">("all");
   const [editor, setEditor] = useState<MenuItem | "new" | null>(null);
   const [categoryOpen, setCategoryOpen] = useState(false);
+  const [takeawayOpen, setTakeawayOpen] = useState(false);
   const [mode, setMode] = useState<"recipe" | "direct">("recipe");
   const [error, setError] = useState("");
   const [recipeError, setRecipeError] = useState("");
   const [recipeEditor, setRecipeEditor] = useState<{ menuItemId: number; recipe: Recipe | null } | null>(null);
   const canManageMenu = user?.role === "root" || user?.role === "accounting_manager" || user?.role === "sales_manager";
   const canManageRecipes = user?.role === "root" || user?.role === "kitchen_manager";
+  const canManageTakeaway = user?.role === "root" || user?.role === "accounting_manager";
 
   const menu = useQuery({ queryKey: ["menu", "management"], queryFn: () => api<MenuItem[]>("/menu-items?include_inactive=true") });
   const categories = useQuery({ queryKey: ["menu-categories", "all"], queryFn: () => api<MenuCategory[]>("/menu-categories?active=false").then(async (inactive) => {
@@ -113,7 +117,7 @@ export default function MenuPage() {
   };
 
   return <div className="page-stack menu-management-page">
-    <header className="page-heading"><div><span className="eyebrow">پل میان صندوق، آشپزخانه و انبار</span><h1>مدیریت منو و خروجی</h1><p>محصول را کامل تنظیم کنید و با گزینه «نمایش در منوی فروش صندوق» مستقیماً در اختیار کاربر حسابداری قرار دهید.</p></div>{canManageMenu && <div className="heading-actions"><Button variant="secondary" onClick={() => setCategoryOpen(true)}><Layers3 size={18} /> دسته‌بندی‌ها</Button><Button onClick={() => openEditor("new")}><Plus size={18} /> محصول منو</Button></div>}</header>
+    <header className="page-heading"><div><span className="eyebrow">پل میان صندوق، آشپزخانه و انبار</span><h1>مدیریت منو و خروجی</h1><p>محصول را کامل تنظیم کنید و با گزینه «نمایش در منوی فروش صندوق» مستقیماً در اختیار کاربر حسابداری قرار دهید.</p></div>{canManageMenu && <div className="heading-actions">{canManageTakeaway && <Button variant="secondary" onClick={() => setTakeawayOpen(true)}><PackageOpen size={18} /> بسته‌بندی بیرون‌بر</Button>}<Button variant="secondary" onClick={() => setCategoryOpen(true)}><Layers3 size={18} /> دسته‌بندی‌ها</Button><Button onClick={() => openEditor("new")}><Plus size={18} /> محصول منو</Button></div>}</header>
     <section className="summary-chips menu-summary">
       <div><span className="chip-icon blue"><Boxes /></span><span><strong>{quantity(visibleInPos)}</strong><small>نمایش در صندوق</small></span></div>
       <div><span className="chip-icon green"><PackageCheck /></span><span><strong>{quantity(ready)}</strong><small>متصل به انبار</small></span></div>
@@ -143,6 +147,7 @@ export default function MenuPage() {
       <label className="field"><span>توضیحات محصول</span><textarea name="description" rows={3} defaultValue={editor !== "new" && editor ? editor.description || "" : ""} /></label>{error && <div className="form-error">{error}</div>}<div className="form-actions"><Button type="button" variant="secondary" onClick={() => setEditor(null)}>انصراف</Button><Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "در حال ذخیره…" : "ذخیره محصول منو"}</Button></div>
     </form></Modal>
     <RecipeEditor open={recipeEditor !== null} recipe={recipeEditor?.recipe || null} initialMenuItemId={recipeEditor?.menuItemId || null} lockMenuItem close={() => setRecipeEditor(null)} menu={items} inventory={inventory.data?.items || []} save={(body, id) => recipeMutation.mutate({ path: id ? `/kitchen/recipes/${id}` : "/kitchen/recipes", method: id ? "PUT" : "POST", body })} pending={recipeMutation.isPending} error={recipeError} />
+    {canManageTakeaway && <TakeawaySupplyManager open={takeawayOpen} close={() => setTakeawayOpen(false)} inventory={inventory.data?.items || []} />}
     <MenuCategoryManager open={categoryOpen} close={() => setCategoryOpen(false)} categories={categories.data || []} />
   </div>;
 }

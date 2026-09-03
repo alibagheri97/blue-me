@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "699484916c876c79ce0550c4f68b87ca6136ae8b",
+    "indexed_at": "2026-09-03T23:46:39Z",
+    "project": "blue-me",
+    "nodes": 1227,
+    "edges": 5510,
+    "original_size": 4259840,
+    "compressed_size": 478925,
+    "compression_level": 3
+}

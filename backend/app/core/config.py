@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     brand_logo_url: str | None = None
     app_locale: str = "fa"
     app_timezone: str = "Asia/Tehran"
+    business_day_start_hour: int = Field(default=5, ge=0, le=23)
     currency_label: str = "تومان"
     app_env: str = "development"
     app_secret_key: str = Field(default="development-only-secret-change-me-please")

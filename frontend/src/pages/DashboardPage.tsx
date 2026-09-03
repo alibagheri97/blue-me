@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, ChefHat, CircleDollarSign, Clock3, PackageCheck, Power, ReceiptText, Route, TrendingDown, TrendingUp, UsersRound } from "lucide-react";
+import { AlertTriangle, ArrowRight, Award, ChefHat, CircleDollarSign, Clock3, PackageCheck, Power, ReceiptText, Route, TrendingDown, TrendingUp, UsersRound, WalletCards } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { businessHour, dateTime, money, quantity, statusLabel } from "../lib/format";
 import type { InventoryItem, Order } from "../types";
 import { Badge, EmptyState, Spinner } from "../components/ui";
+import { DayOrdersHistory } from "../components/DayOrdersHistory";
+import { CheckInChecklistManager } from "../components/CheckInChecklistManager";
 import { useAuth } from "../context/AuthContext";
 
 interface Dashboard {
@@ -52,7 +54,7 @@ export default function DashboardPage() {
       </header>
 
       <section className="metric-grid">
-        <article className="metric-card metric-primary"><span className="metric-icon"><CircleDollarSign /></span><div><small>فروش امروز</small><strong>{money(data.sales_today)}</strong><span className={change >= 0 ? "trend-positive" : "trend-negative"}>{change >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}{quantity(Math.abs(change))}٪ نسبت به دیروز</span></div></article>
+        <article className="metric-card metric-primary"><span className="metric-icon"><CircleDollarSign /></span><div><small>فروش روز کاری · ۰۵ تا ۰۵</small><strong>{money(data.sales_today)}</strong><span className={change >= 0 ? "trend-positive" : "trend-negative"}>{change >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}{quantity(Math.abs(change))}٪ نسبت به روز کاری قبل</span></div></article>
         <article className="metric-card"><span className="metric-icon mint"><ReceiptText /></span><div><small>سفارش‌های امروز</small><strong>{quantity(data.orders_today)}</strong><span>میانگین هر سفارش {money(data.average_order_value)}</span></div></article>
         <article className="metric-card"><span className="metric-icon amber"><PackageCheck /></span><div><small>هشدار موجودی</small><strong>{quantity(data.low_stock_count)}</strong><span>{quantity(data.automatic_purchase_needs)} پیشنهاد خودکار خرید فردا</span></div></article>
         <article className="metric-card"><span className="metric-icon violet"><ChefHat /></span><div><small>صف آشپزخانه</small><strong>{quantity(data.orders_in_kitchen)}</strong><span>{quantity(data.pending_daily_needs)} نیاز خرید · {quantity(data.unread_notifications)} اعلان تازه</span></div></article>
@@ -68,6 +70,12 @@ export default function DashboardPage() {
           {data.low_stock_items.length ? <div className="attention-list">{data.low_stock_items.map((item) => { const percentage = Number(item.reorder_level) ? Math.max(0, Math.min(100, Number(item.current_quantity) / Number(item.reorder_level) * 100)) : 0; return <div className="attention-row" key={item.id}><div className="attention-title"><span style={{ background: item.category?.color || "#64748b" }} /><strong>{item.name}</strong><small>{quantity(item.current_quantity)} {item.unit} باقی مانده</small></div><div className="stock-meter"><span style={{ width: `${percentage}%` }} /></div></div>; })}</div> : <EmptyState icon={<PackageCheck />} title="وضعیت موجودی مناسب است" text="هیچ کالایی زیر نقطه سفارش نیست." />}
         </aside>
       </section>
+
+      {user?.role === "root" && <section className="payroll-dashboard-cta"><span><WalletCards /></span><div><small>مرکز مدیریت پرسنل</small><h2>حقوق، درصد سود و امتیاز عملکرد</h2><p>قرارداد انحصاری هر همکار، امتیازهای خودکار حضور و چک‌لیست، تشویق و کسر مدیریتی و تسویه دوره‌ای را یکجا مدیریت کنید.</p></div><div className="payroll-cta-points"><Award /><span><strong>منصفانه و شفاف</strong><small>دفتر امتیاز قابل پیگیری</small></span></div><Link to="/payroll">ورود به مرکز حقوق و امتیاز <ArrowRight /></Link></section>}
+
+      {user?.role === "root" && <CheckInChecklistManager />}
+
+      <DayOrdersHistory compact />
 
       {user?.role === "root" && <section className="quick-strip"><div><UsersRound size={20} /><span><strong>{quantity(data.active_users)} کاربر فعال</strong><small>نقش‌ها و دسترسی‌ها تحت کنترل‌اند</small></span></div><div><Clock3 size={20} /><span><strong>{quantity(data.pending_daily_needs + data.pending_price_approvals)} تصمیم در انتظار</strong><small>برای ادامه روان کارها، درخواست‌ها را بررسی کنید</small></span></div><Link to={data.pending_price_approvals ? "/inventory" : "/kitchen"}>بررسی درخواست‌ها <ArrowRight size={16} /></Link></section>}
 

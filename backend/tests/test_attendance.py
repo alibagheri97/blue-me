@@ -12,6 +12,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.services.business_time import business_today, day_bounds
 
 
 def linked_staff(db: Session, role: UserRole, *, active: bool = True) -> StaffMember:
@@ -82,14 +83,30 @@ def test_staff_check_in_and_check_out_are_saved_notified_and_audited(
     assert checkout_data["is_checked_in"] is False
     assert checkout_data["current_session"] is None
     assert checkout_data["last_session"]["is_open"] is False
-    assert checkout_data["last_session"]["duration_minutes"] >= 95
-    assert checkout_data["worked_minutes_today"] >= 95
+    db_session.refresh(record)
+    expected_duration = max(
+        0,
+        int((record.checked_out_at - record.checked_in_at).total_seconds() // 60),
+    )
+    assert checkout_data["last_session"]["duration_minutes"] == expected_duration
+    assert expected_duration >= 94
+    today_start, _ = day_bounds(business_today())
+    expected_today = max(
+        0,
+        int(
+            (
+                record.checked_out_at - max(record.checked_in_at, today_start)
+            ).total_seconds()
+            // 60
+        ),
+    )
+    assert checkout_data["worked_minutes_today"] == expected_today
     assert client.post("/attendance/check-out", headers=accounting_headers).status_code == 409
 
     overview_after = client.get("/attendance", headers=root_headers).json()
     assert overview_after["present_count"] == 0
     assert overview_after["completed_today"] == 1
-    assert overview_after["worked_minutes_today"] >= 95
+    assert overview_after["worked_minutes_today"] == expected_today
     notifications = list(
         db_session.scalars(
             select(Notification)
@@ -130,6 +147,12 @@ def test_unlinked_or_inactive_staff_cannot_check_in(
         "current_session": None,
         "last_session": None,
         "worked_minutes_today": 0,
+        "checklist_required": False,
+        "checklist_items": [],
+        "entry_allowed": True,
+        "entry_checklist_completed": True,
+        "checkout_checklist_required": False,
+        "checkout_checklist_items": [],
     }
     assert client.post("/attendance/check-in", headers=storage_headers).status_code == 409
 

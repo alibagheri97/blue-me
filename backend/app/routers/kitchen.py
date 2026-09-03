@@ -167,7 +167,8 @@ def list_kitchen_orders(
         .where(
             Order.status.in_(
                 [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY]
-            )
+            ),
+            Order.is_deleted.is_(False),
         )
         .order_by(Order.created_at)
         .limit(300)

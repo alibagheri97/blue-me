@@ -632,10 +632,7 @@ def test_batch_purchase_direct_sale_historic_profit_and_automatic_shopping(
     assert meat_after_purchase["purchase_quantity"] == "5.000"
     assert meat_after_purchase["purchase_unit"] == "کیلوگرم"
     assert meat_after_purchase["purchase_total_price"] == "1000000.00"
-    assert (
-        client.post("/purchases", headers=accounting_headers, json={}).status_code
-        == 403
-    )
+    assert client.get("/purchases", headers=accounting_headers).status_code == 200
 
     enabled = client.patch(
         f"/inventory/items/{water['id']}",

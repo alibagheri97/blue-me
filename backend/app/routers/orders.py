@@ -19,6 +19,7 @@ from app.models import (
     Order,
     OrderItem,
     OrderStatus,
+    OrderType,
     PaymentMethod,
     Recipe,
     RecipeIngredient,
@@ -26,6 +27,7 @@ from app.models import (
     StockMovement,
     User,
     UserRole,
+    utcnow,
 )
 from app.schemas import (
     CustomerCreate,
@@ -45,6 +47,10 @@ from app.services.inventory_alerts import sync_auto_purchase_need
 from app.services.business_time import business_today, day_bounds
 from app.services.persian_quotes import quote_for_order
 from app.services.system_settings import get_system_settings
+from app.services.takeaway import (
+    calculate_takeaway_requirements,
+    merge_stock_requirements,
+)
 
 router = APIRouter(tags=["orders"])
 accounting_roles = require_roles(UserRole.ROOT, UserRole.ACCOUNTING_MANAGER)
@@ -59,6 +65,7 @@ menu_view_roles = require_roles(
 order_status_roles = require_roles(
     UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.KITCHEN_MANAGER
 )
+ORDER_STOCK_REFERENCE_TYPES = ["order", "order_takeaway", "order_edit"]
 
 
 def menu_query():
@@ -155,7 +162,11 @@ def validate_direct_inventory(db: Session, inventory_item_id: int | None) -> Non
 
 
 def order_query():
-    return select(Order).options(selectinload(Order.items))
+    return (
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.is_deleted.is_(False))
+    )
 
 
 def get_order_or_404(db: Session, order_id: int, *, lock: bool = False) -> Order:
@@ -225,7 +236,7 @@ def current_order_stock_requirements(db: Session, order_id: int) -> dict[int, De
     balances: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
     movements = db.scalars(
         select(StockMovement).where(
-            StockMovement.reference_type.in_(["order", "order_edit"]),
+            StockMovement.reference_type.in_(ORDER_STOCK_REFERENCE_TYPES),
             StockMovement.reference_id == order_id,
         )
     )
@@ -236,6 +247,21 @@ def current_order_stock_requirements(db: Session, order_id: int) -> dict[int, De
         for item_id, quantity in balances.items()
         if quantity < 0
     }
+
+
+def resolve_takeaway_package_count(
+    order_type: OrderType,
+    requested_count: int | None,
+    *,
+    current_order: Order | None = None,
+) -> int:
+    if order_type == OrderType.DINE_IN:
+        return 0
+    if requested_count is not None:
+        return requested_count
+    if current_order is not None and current_order.order_type == OrderType.TAKEAWAY:
+        return current_order.takeaway_package_count
+    return 1
 
 
 @router.get("/customers", response_model=list[CustomerRead])
@@ -544,8 +570,17 @@ def create_order(
             db.add(customer)
             db.flush()
 
-    subtotal, required_stock, unit_costs = calculate_order_requirements(
+    subtotal, menu_required_stock, unit_costs = calculate_order_requirements(
         payload.items, menu_items
+    )
+    takeaway_package_count = resolve_takeaway_package_count(
+        payload.order_type, payload.takeaway_package_count
+    )
+    takeaway_required_stock, takeaway_supplies = calculate_takeaway_requirements(
+        db, takeaway_package_count
+    )
+    required_stock = merge_stock_requirements(
+        menu_required_stock, takeaway_required_stock
     )
     is_staff_meal = staff_member is not None
     if not is_staff_meal and payload.discount > subtotal:
@@ -597,6 +632,8 @@ def create_order(
         staff_member_id=staff_member.id if staff_member else None,
         staff_name=staff_member.name if staff_member else None,
         is_staff_meal=is_staff_meal,
+        order_type=payload.order_type,
+        takeaway_package_count=takeaway_package_count,
         subtotal=subtotal,
         discount=effective_discount,
         total=Decimal("0") if is_staff_meal else subtotal - effective_discount,
@@ -622,35 +659,62 @@ def create_order(
                 notes=line.notes,
             )
         )
-    for item_id, amount in required_stock.items():
+    for item_id in sorted(required_stock):
         stock_item = locked_items[item_id]
-        before = stock_item.current_quantity
-        stock_item.current_quantity = before - amount
-        db.add(
-            StockMovement(
-                item_id=item_id,
-                movement_type=(
-                    MovementType.CONSUME if is_staff_meal else MovementType.SALE
-                ),
-                quantity=-amount,
-                unit_cost=stock_item.average_cost,
-                quantity_before=before,
-                quantity_after=stock_item.current_quantity,
-                reason=(
+        menu_amount = menu_required_stock.get(item_id, Decimal("0"))
+        takeaway_amount = takeaway_required_stock.get(item_id, Decimal("0"))
+        for amount, reference_type, reason in (
+            (
+                menu_amount,
+                "order",
+                (
                     f"Staff meal for {staff_member.name} in order {order.order_number}"
                     if staff_member is not None
                     else f"Ingredients used by order {order.order_number}"
                 ),
-                reference_type="order",
-                reference_id=order.id,
-                created_by_id=actor.id,
+            ),
+            (
+                takeaway_amount,
+                "order_takeaway",
+                f"بسته‌بندی بیرون‌بر سفارش {order.order_number}",
+            ),
+        ):
+            if amount <= 0:
+                continue
+            before = Decimal(stock_item.current_quantity)
+            stock_item.current_quantity = before - amount
+            db.add(
+                StockMovement(
+                    item_id=item_id,
+                    movement_type=(
+                        MovementType.CONSUME
+                        if is_staff_meal
+                        else MovementType.SALE
+                    ),
+                    quantity=-amount,
+                    unit_cost=stock_item.average_cost,
+                    quantity_before=before,
+                    quantity_after=stock_item.current_quantity,
+                    reason=reason,
+                    reference_type=reference_type,
+                    reference_id=order.id,
+                    created_by_id=actor.id,
+                )
             )
-        )
         sync_auto_purchase_need(db, item=stock_item, actor=actor)
-    total_cogs = sum(
+    takeaway_cost = sum(
+        (
+            Decimal(locked_items[item_id].average_cost) * amount
+            for item_id, amount in takeaway_required_stock.items()
+        ),
+        Decimal("0"),
+    ).quantize(Decimal("0.01"))
+    order.takeaway_cost = takeaway_cost
+    menu_cogs = sum(
         (unit_costs[line.menu_item_id] * line.quantity for line in payload.items),
         Decimal("0"),
     )
+    total_cogs = menu_cogs + takeaway_cost
     record_audit(
         db,
         actor=actor,
@@ -674,6 +738,20 @@ def create_order(
             "payment": order.payment_method.value,
             "is_staff_meal": is_staff_meal,
             "staff_member_id": order.staff_member_id,
+            "order_type": order.order_type.value,
+            "takeaway_package_count": order.takeaway_package_count,
+            "takeaway_cost": str(order.takeaway_cost),
+            "takeaway_supplies": [
+                {
+                    "inventory_item_id": supply.inventory_item_id,
+                    "name": supply.inventory_item.name,
+                    "quantity": str(
+                        takeaway_required_stock[supply.inventory_item_id]
+                    ),
+                    "unit": supply.inventory_item.unit,
+                }
+                for supply in takeaway_supplies
+            ],
             "excluded_from_sales_reports": is_staff_meal,
             "kitchen_workflow_enabled": kitchen_workflow_enabled,
             "initial_status": order.status.value,
@@ -727,6 +805,12 @@ def update_order(
     order = get_order_or_404(db, order_id, lock=True)
     if order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=409, detail="A cancelled order cannot be edited")
+    customer_fields = {"customer_id", "customer"}.intersection(payload.model_fields_set)
+    if order.is_staff_meal and customer_fields:
+        raise HTTPException(
+            status_code=409,
+            detail="A staff meal cannot be reassigned to a customer",
+        )
 
     previous_items = [
         {
@@ -757,8 +841,28 @@ def update_order(
             status_code=400, detail="One or more menu items are unavailable"
         )
 
-    subtotal, required_stock, unit_costs = calculate_order_requirements(
+    subtotal, menu_required_stock, unit_costs = calculate_order_requirements(
         payload.items, menu_items
+    )
+    requested_order_type = payload.order_type or order.order_type
+    if (
+        requested_order_type == OrderType.DINE_IN
+        and payload.takeaway_package_count is not None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Dine-in orders cannot have takeaway packages",
+        )
+    takeaway_package_count = resolve_takeaway_package_count(
+        requested_order_type,
+        payload.takeaway_package_count,
+        current_order=order,
+    )
+    takeaway_required_stock, takeaway_supplies = calculate_takeaway_requirements(
+        db, takeaway_package_count
+    )
+    required_stock = merge_stock_requirements(
+        menu_required_stock, takeaway_required_stock
     )
     if not order.is_staff_meal and payload.discount > subtotal:
         raise HTTPException(
@@ -796,6 +900,35 @@ def update_order(
             detail={"message": "Insufficient ingredients", "items": shortages},
         )
 
+    takeaway_cost = sum(
+        (
+            Decimal(locked_items[item_id].average_cost) * amount
+            for item_id, amount in takeaway_required_stock.items()
+        ),
+        Decimal("0"),
+    ).quantize(Decimal("0.01"))
+
+    previous_customer = {
+        "customer_id": order.customer_id,
+        "customer_name": order.customer_name,
+    }
+    if customer_fields:
+        customer: Customer | None = None
+        if payload.customer_id is not None:
+            customer = db.get(Customer, payload.customer_id)
+            if customer is None:
+                raise HTTPException(status_code=400, detail="Customer not found")
+        elif payload.customer is not None:
+            customer = db.scalar(
+                select(Customer).where(Customer.phone == payload.customer.phone)
+            )
+            if customer is None:
+                customer = Customer(**payload.customer.model_dump())
+                db.add(customer)
+                db.flush()
+        order.customer_id = customer.id if customer else None
+        order.customer_name = customer.name if customer else "Guest"
+
     for item_id, delta in stock_deltas.items():
         if delta == 0:
             continue
@@ -824,6 +957,9 @@ def update_order(
         "total": str(order.total),
         "payment_method": order.payment_method.value,
         "notes": order.notes,
+        "order_type": order.order_type.value,
+        "takeaway_package_count": order.takeaway_package_count,
+        "takeaway_cost": str(order.takeaway_cost),
     }
     order.items.clear()
     db.flush()
@@ -850,11 +986,15 @@ def update_order(
     order.payment_method = (
         PaymentMethod.OTHER if order.is_staff_meal else payload.payment_method
     )
+    order.order_type = requested_order_type
+    order.takeaway_package_count = takeaway_package_count
+    order.takeaway_cost = takeaway_cost
     order.notes = payload.notes
-    total_cogs = sum(
+    menu_cogs = sum(
         (unit_costs[line.menu_item_id] * line.quantity for line in payload.items),
         Decimal("0"),
     )
+    total_cogs = menu_cogs + takeaway_cost
     record_audit(
         db,
         actor=actor,
@@ -872,6 +1012,20 @@ def update_order(
                 "payment_method": order.payment_method.value,
                 "notes": order.notes,
                 "cost": str(total_cogs),
+                "order_type": order.order_type.value,
+                "takeaway_package_count": order.takeaway_package_count,
+                "takeaway_cost": str(order.takeaway_cost),
+                "takeaway_supplies": [
+                    {
+                        "inventory_item_id": supply.inventory_item_id,
+                        "name": supply.inventory_item.name,
+                        "quantity": str(
+                            takeaway_required_stock[supply.inventory_item_id]
+                        ),
+                        "unit": supply.inventory_item.unit,
+                    }
+                    for supply in takeaway_supplies
+                ],
                 "items": [
                     {
                         "menu_item_id": line.menu_item_id,
@@ -889,11 +1043,108 @@ def update_order(
                 if delta != 0
             },
             "status_preserved": order.status.value,
+            "customer": {
+                "before": previous_customer,
+                "after": {
+                    "customer_id": order.customer_id,
+                    "customer_name": order.customer_name,
+                },
+            },
         },
         ip_address=client_ip(request),
     )
     db.commit()
     return get_order_or_404(db, order.id)
+
+
+@router.delete("/orders/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_order(
+    order_id: int,
+    request: Request,
+    actor: User = Depends(accounting_roles),
+    db: Session = Depends(get_db),
+) -> None:
+    order = get_order_or_404(db, order_id, lock=True)
+    previous_status = order.status
+    restored_stock: dict[str, str] = {}
+
+    if previous_status != OrderStatus.CANCELLED:
+        requirements = current_order_stock_requirements(db, order.id)
+        inventory_ids = sorted(requirements)
+        stocks = {
+            item.id: item
+            for item in db.scalars(
+                select(InventoryItem)
+                .where(InventoryItem.id.in_(inventory_ids))
+                .order_by(InventoryItem.id)
+                .with_for_update()
+            )
+        }
+        for item_id, restored in requirements.items():
+            stock = stocks.get(item_id)
+            if stock is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Inventory item {item_id} needed for restoration was not found",
+                )
+            before = Decimal(stock.current_quantity)
+            stock.current_quantity = before + restored
+            db.add(
+                StockMovement(
+                    item_id=stock.id,
+                    movement_type=MovementType.ADJUST,
+                    quantity=restored,
+                    unit_cost=stock.average_cost,
+                    quantity_before=before,
+                    quantity_after=stock.current_quantity,
+                    reason=f"بازگشت موجودی پس از حذف سفارش {order.order_number}",
+                    reference_type="order_delete",
+                    reference_id=order.id,
+                    created_by_id=actor.id,
+                )
+            )
+            sync_auto_purchase_need(db, item=stock, actor=actor)
+            restored_stock[str(item_id)] = str(restored)
+
+    order.status = OrderStatus.CANCELLED
+    order.is_deleted = True
+    order.deleted_at = utcnow()
+    order.deleted_by_id = actor.id
+    record_audit(
+        db,
+        actor=actor,
+        action="delete",
+        category="orders",
+        entity_type="order",
+        entity_id=order.id,
+        summary=f"سفارش {order.order_number} حذف شد",
+        details={
+            "order_number": order.order_number,
+            "previous_status": previous_status.value,
+            "customer_id": order.customer_id,
+            "customer_name": order.customer_name,
+            "is_staff_meal": order.is_staff_meal,
+            "order_type": order.order_type.value,
+            "takeaway_package_count": order.takeaway_package_count,
+            "takeaway_cost": str(order.takeaway_cost),
+            "subtotal": str(order.subtotal),
+            "discount": str(order.discount),
+            "total": str(order.total),
+            "items": [
+                {
+                    "menu_item_id": line.menu_item_id,
+                    "name": line.name,
+                    "quantity": line.quantity,
+                    "unit_price": str(line.unit_price),
+                }
+                for line in order.items
+            ],
+            "inventory_restored": restored_stock,
+            "recoverable_soft_delete": True,
+        },
+        ip_address=client_ip(request),
+    )
+    db.commit()
 
 
 @router.patch(

@@ -19,6 +19,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
+import { JalaliDatePicker } from "../components/JalaliDatePicker";
 import { Badge, Button, EmptyState, Modal, Spinner } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, api, assetUrl } from "../lib/api";
@@ -221,7 +222,7 @@ export default function PurchasesPage() {
         </header>
 
         <div className="purchase-meta-strip">
-          <label className="field"><span>تاریخ خرید</span><input name="purchased_at" type="date" defaultValue={businessDate()} required /></label>
+          <label className="field"><span>تاریخ خرید</span><JalaliDatePicker name="purchased_at" defaultValue={businessDate()} required ariaLabel="تاریخ شمسی خرید" /></label>
           <label className="field"><span>فروشنده</span><input name="supplier_name" placeholder="مثلاً پخش مرکزی" /></label>
           <label className="field"><span>شماره فاکتور</span><input name="invoice_number" placeholder="اختیاری" /></label>
         </div>

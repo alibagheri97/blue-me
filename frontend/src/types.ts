@@ -50,6 +50,27 @@ export interface AttendanceRecord {
   duration_minutes: number;
   is_open: boolean;
   staff_member: AttendanceStaff;
+  checklist_completions: AttendanceChecklistCompletion[];
+}
+
+export interface CheckInChecklistItem {
+  id: number;
+  user_id: number;
+  title: string;
+  description: string | null;
+  phase: "entry" | "exit";
+  sort_order: number;
+  is_active: boolean;
+  created_by_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AttendanceChecklistCompletion {
+  checklist_item_id: number;
+  title_snapshot: string;
+  phase: "entry" | "exit";
+  completed_at: string;
 }
 
 export interface AttendanceStatus {
@@ -59,6 +80,112 @@ export interface AttendanceStatus {
   current_session: AttendanceRecord | null;
   last_session: AttendanceRecord | null;
   worked_minutes_today: number;
+  checklist_required: boolean;
+  checklist_items: CheckInChecklistItem[];
+  entry_allowed: boolean;
+  entry_checklist_completed: boolean;
+  checkout_checklist_required: boolean;
+  checkout_checklist_items: CheckInChecklistItem[];
+}
+
+export type CompensationType = "salary" | "profit_share";
+
+export interface PayrollStaff {
+  id: number;
+  name: string;
+  position: string | null;
+  user_id: number | null;
+  is_active: boolean;
+  pay_type: CompensationType;
+  pay_rate: string;
+  point_value: string;
+  user: User | null;
+}
+
+export interface PointPolicy {
+  check_in_points: number;
+  entry_checklist_points: number;
+  check_out_points: number;
+  exit_checklist_points: number;
+  work_hour_points: number;
+  updated_at: string;
+}
+
+export type PointSource =
+  | "manual"
+  | "check_in"
+  | "entry_checklist"
+  | "check_out"
+  | "exit_checklist"
+  | "work_hours";
+
+export interface StaffPointEntry {
+  id: number;
+  staff_member_id: number;
+  points: number;
+  source: PointSource;
+  reason: string;
+  attendance_record_id: number | null;
+  created_by_id: number | null;
+  created_by: User | null;
+  created_at: string;
+}
+
+export interface PayrollCalculation {
+  staff_member: PayrollStaff;
+  period_start: string;
+  period_end: string;
+  profit_basis: string;
+  base_compensation: string;
+  points_total: number;
+  positive_points: number;
+  negative_points: number;
+  point_value: string;
+  points_adjustment: string;
+  payable_total: string;
+  worked_minutes: number;
+  attendance_count: number;
+  entry_checklists_completed: number;
+  exit_checklists_completed: number;
+}
+
+export interface PayrollStatement {
+  id: number;
+  staff_member_id: number;
+  period_start: string;
+  period_end: string;
+  pay_type: CompensationType;
+  pay_rate: string;
+  profit_basis: string;
+  base_compensation: string;
+  points_total: number;
+  point_value: string;
+  points_adjustment: string;
+  payable_total: string;
+  worked_minutes: number;
+  attendance_count: number;
+  entry_checklists_completed: number;
+  exit_checklists_completed: number;
+  status: "draft" | "paid";
+  created_by_id: number;
+  paid_by_id: number | null;
+  created_at: string;
+  paid_at: string | null;
+  staff_member: PayrollStaff;
+}
+
+export interface MyPerformance {
+  staff_member_id: number | null;
+  eligible: boolean;
+  period_start: string;
+  period_end: string;
+  total_points: number;
+  positive_points: number;
+  negative_points: number;
+  worked_minutes: number;
+  attendance_count: number;
+  entry_checklists_completed: number;
+  exit_checklists_completed: number;
 }
 
 export interface AttendanceOverview {
@@ -153,6 +280,19 @@ export interface MenuItem {
   recipe_configured: boolean;
   is_available: boolean;
   max_available_quantity: number | null;
+}
+
+export type OrderType = "dine_in" | "takeaway";
+
+export interface TakeawaySupply {
+  id: number;
+  inventory_item_id: number;
+  quantity_per_package: string;
+  calculated_cost: string;
+  max_packages_available: number;
+  inventory_item: InventoryItem;
+  created_at: string;
+  updated_at: string;
 }
 
 export type KitchenMenuItem = Pick<
@@ -256,6 +396,8 @@ export interface OrderItem {
   notes: string | null;
 }
 
+export type PaymentMethod = "cash" | "card" | "online" | "other";
+
 export interface Order {
   id: number;
   order_number: string;
@@ -265,10 +407,13 @@ export interface Order {
   staff_member_id: number | null;
   staff_name: string | null;
   is_staff_meal: boolean;
+  order_type: OrderType;
+  takeaway_package_count: number;
+  takeaway_cost: string;
   subtotal: string;
   discount: string;
   total: string;
-  payment_method: string;
+  payment_method: PaymentMethod;
   notes: string | null;
   created_by_id: number;
   created_at: string;
@@ -292,6 +437,8 @@ export interface KitchenOrder {
   staff_member_id: number | null;
   staff_name: string | null;
   is_staff_meal: boolean;
+  order_type: OrderType;
+  takeaway_package_count: number;
   notes: string | null;
   created_at: string;
   updated_at: string;

@@ -139,6 +139,32 @@ def test_seed_installs_exact_production_menu_and_preserves_later_edits(
     assert zamzam.average_cost == Decimal("0")
     assert zamzam.last_purchase_price == Decimal("0")
 
+    takeaway_supplies = {
+        item.name: item
+        for item in db_session.scalars(
+            select(InventoryItem).where(
+                InventoryItem.name.in_(
+                    {
+                        "ظرف آلومینیومی",
+                        "خلال دندان",
+                        "دستمال کاغذی",
+                        "پاکت بیرون‌بر",
+                        "قاشق و چنگال یک‌بارمصرف",
+                    }
+                )
+            )
+        )
+    }
+    assert set(takeaway_supplies) == {
+        "ظرف آلومینیومی",
+        "خلال دندان",
+        "دستمال کاغذی",
+        "پاکت بیرون‌بر",
+        "قاشق و چنگال یک‌بارمصرف",
+    }
+    assert all(item.category.name == "بسته‌بندی" for item in takeaway_supplies.values())
+    assert all(item.unit == "عدد" for item in takeaway_supplies.values())
+
     menu["شاورما مرغ"].selling_price = Decimal("410000")
     menu["شاورما مرغ"].image_path = "/menu-images/custom-chicken.webp"
     chicken_ingredient = next(

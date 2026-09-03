@@ -29,7 +29,9 @@ from app.services.inventory_alerts import sync_auto_purchase_need
 from app.services.units import unit_factor
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
-purchase_roles = require_roles(UserRole.ROOT, UserRole.STORAGE_MANAGER)
+purchase_roles = require_roles(
+    UserRole.ROOT, UserRole.STORAGE_MANAGER, UserRole.ACCOUNTING_MANAGER
+)
 root_only = require_roles(UserRole.ROOT)
 CENT = Decimal("0.01")
 FOUR_PLACES = Decimal("0.0001")

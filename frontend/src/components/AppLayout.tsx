@@ -12,9 +12,11 @@ import {
   LogOut,
   Menu,
   PackagePlus,
+  Sparkles,
   ShoppingCart,
   UtensilsCrossed,
   UsersRound,
+  WalletCards,
   X,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,14 +25,17 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, api } from "../lib/api";
 import { dateTime, roleLabel, timeOnly } from "../lib/format";
-import type { AttendanceStatus, Notification, Role } from "../types";
+import type { AttendanceStatus, MyPerformance, Notification, Role } from "../types";
+import { CheckInGate, CheckInGateError, CheckInGateLoading } from "./CheckInGate";
+import { CheckoutChecklistModal } from "./CheckoutChecklistModal";
 
 const nav = [
   { to: "/", label: "نمای کلی", icon: LayoutDashboard, roles: ["root", "accounting_manager"] },
   { to: "/users", label: "کاربران و دسترسی", icon: UsersRound, roles: ["root"] },
   { to: "/staff", label: "پرسنل، حضور و غذا", icon: ContactRound, roles: ["root", "accounting_manager"] },
+  { to: "/payroll", label: "حقوق و امتیاز", icon: WalletCards, roles: ["root"] },
   { to: "/inventory", label: "مدیریت انبار", icon: Boxes, roles: ["root", "storage_manager"] },
-  { to: "/purchases", label: "ورودی کالا", icon: PackagePlus, roles: ["root", "storage_manager"] },
+  { to: "/purchases", label: "ورودی کالا", icon: PackagePlus, roles: ["root", "storage_manager", "accounting_manager"] },
   { to: "/menu", label: "مدیریت منو", icon: UtensilsCrossed, roles: ["root", "accounting_manager", "sales_manager"] },
   { to: "/pos", label: "سفارش و صندوق", icon: ShoppingCart, roles: ["root", "accounting_manager"] },
   { to: "/kitchen", label: "آشپزخانه", icon: ChefHat, roles: ["root", "kitchen_manager"] },
@@ -57,10 +62,24 @@ export function AppLayout() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [attendanceError, setAttendanceError] = useState("");
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const attendance = useQuery({
+    queryKey: ["attendance", "me"],
+    queryFn: () => api<AttendanceStatus>("/attendance/me"),
+    enabled: Boolean(user),
+    refetchInterval: 30_000,
+  });
   const notifications = useQuery({
     queryKey: ["notifications"],
     queryFn: () => api<{ items: Notification[]; unread_count: number }>("/notifications?limit=20"),
+    enabled: attendance.data?.entry_allowed === true,
     refetchInterval: 30_000,
+  });
+  const performance = useQuery({
+    queryKey: ["payroll", "me"],
+    queryFn: () => api<MyPerformance>("/payroll/me"),
+    enabled: attendance.data?.entry_allowed === true,
+    refetchInterval: 60_000,
   });
   const readNotification = useMutation({
     mutationFn: (id: number) => api(`/notifications/${id}/read`, { method: "POST" }),
@@ -70,23 +89,24 @@ export function AppLayout() {
     mutationFn: () => api("/notifications/read-all", { method: "POST" }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["notifications"] }),
   });
-  const attendance = useQuery({
-    queryKey: ["attendance", "me"],
-    queryFn: () => api<AttendanceStatus>("/attendance/me"),
-    enabled: Boolean(user),
-    refetchInterval: 30_000,
-  });
   const attendanceMutation = useMutation({
-    mutationFn: (action: "check-in" | "check-out") => api<AttendanceStatus>(`/attendance/${action}`, { method: "POST" }),
+    mutationFn: ({ action, itemIds = [] }: { action: "check-in" | "check-in-checklist" | "check-out"; itemIds?: number[] }) => api<AttendanceStatus>(`/attendance/${action}`, { method: "POST", body: action === "check-in" ? {} : { checklist_item_ids: itemIds } }),
     onSuccess: (data) => {
       setAttendanceError("");
+      setCheckoutOpen(false);
       client.setQueryData(["attendance", "me"], data);
       client.invalidateQueries({ queryKey: ["attendance", "overview"] });
       client.invalidateQueries({ queryKey: ["notifications"] });
+      client.invalidateQueries({ queryKey: ["payroll"] });
     },
     onError: (reason) => setAttendanceError(reason instanceof ApiError ? reason.message : "ثبت حضور انجام نشد"),
   });
   if (!user) return null;
+  if (attendance.isLoading) return <CheckInGateLoading brand={brand} />;
+  if (attendance.isError || !attendance.data) return <CheckInGateError brand={brand} retry={() => attendance.refetch()} logout={logout} />;
+  if (attendance.data.checklist_required && !attendance.data.entry_allowed) {
+    return <CheckInGate status={attendance.data} brand={brand} user={user} pending={attendanceMutation.isPending} error={attendanceError} onCheckIn={() => attendanceMutation.mutate({ action: "check-in" })} onComplete={(itemIds) => attendanceMutation.mutate({ action: "check-in-checklist", itemIds })} onLogout={logout} />;
+  }
   const visibleNav = nav.filter((item) => (item.roles as readonly Role[]).includes(user.role));
   const isCheckedIn = attendance.data?.is_checked_in === true;
   const showAttendance = Boolean(attendance.data?.staff_member) && (attendance.data?.eligible === true || isCheckedIn);
@@ -120,10 +140,11 @@ export function AppLayout() {
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button>
           <div className="topbar-context"><span>فضای مدیریت عملیات</span><strong>{brand.tagline}</strong></div>
           <div className="topbar-actions">
-            {showAttendance && <button type="button" className={`attendance-button ${isCheckedIn ? "checked-in" : "checked-out"} ${attendanceError ? "has-error" : ""}`} disabled={attendanceMutation.isPending || attendance.isLoading} onClick={() => attendanceMutation.mutate(isCheckedIn ? "check-out" : "check-in")} title={attendanceError || (isCheckedIn ? "ثبت پایان حضور و خروج" : "ثبت شروع حضور و ورود")}><span className="attendance-icon">{isCheckedIn ? <LogOut size={17} /> : <LogIn size={17} />}</span><span><strong>{attendanceMutation.isPending ? "در حال ثبت…" : isCheckedIn ? "ثبت خروج" : "ثبت ورود"}</strong><small>{attendanceError || (isCheckedIn ? `ورود ${attendanceTime(attendance.data?.current_session?.checked_in_at)}` : `${attendanceDuration(attendance.data?.worked_minutes_today || 0)} امروز`)}</small></span><i /></button>}
+            {performance.data?.staff_member_id && <span className={`performance-pill ${performance.data.total_points < 0 ? "negative" : ""}`} title="امتیاز عملکرد ماه جاری"><Sparkles size={15} /><strong>{performance.data.total_points.toLocaleString("fa-IR")}</strong><small>امتیاز من</small></span>}
+            {showAttendance && <button type="button" className={`attendance-button ${isCheckedIn ? "checked-in" : "checked-out"} ${attendanceError ? "has-error" : ""}`} disabled={attendanceMutation.isPending || attendance.isLoading} onClick={() => { setAttendanceError(""); if (isCheckedIn && attendance.data.checkout_checklist_required) setCheckoutOpen(true); else attendanceMutation.mutate({ action: isCheckedIn ? "check-out" : "check-in" }); }} title={attendanceError || (isCheckedIn ? "ثبت پایان حضور و خروج" : "ثبت شروع حضور و ورود")}><span className="attendance-icon">{isCheckedIn ? <LogOut size={17} /> : <LogIn size={17} />}</span><span><strong>{attendanceMutation.isPending ? "در حال ثبت…" : isCheckedIn ? "ثبت خروج" : "ثبت ورود"}</strong><small>{attendanceError || (isCheckedIn ? `ورود ${attendanceTime(attendance.data?.current_session?.checked_in_at)}` : `${attendanceDuration(attendance.data?.worked_minutes_today || 0)} امروز`)}</small></span><i /></button>}
             <div className="notification-wrap">
               <button className="notification-button" onClick={() => { setNotificationsOpen(!notificationsOpen); setProfileOpen(false); }} aria-label="اعلان‌ها"><Bell size={20} />{(notifications.data?.unread_count || 0) > 0 && <i>{notifications.data?.unread_count}</i>}</button>
-              {notificationsOpen && <div className="notification-menu"><header><div><strong>اعلان‌ها</strong><small>{notifications.data?.unread_count || 0} خوانده‌نشده</small></div>{(notifications.data?.unread_count || 0) > 0 && <button onClick={() => readAll.mutate()}>خواندن همه</button>}</header><div className="notification-list">{notifications.isLoading ? <span className="notification-empty">در حال دریافت…</span> : notifications.data?.items.length ? notifications.data.items.map((item) => <button key={item.id} className={item.is_read ? "read" : ""} onClick={() => { if (!item.is_read) readNotification.mutate(item.id); if (item.entity_type === "daily_need") navigate("/kitchen?tab=needs"); if (item.entity_type === "attendance") navigate("/staff?tab=attendance"); setNotificationsOpen(false); }}><span className="notification-dot" /><div><strong>{item.title}</strong><p>{item.message}</p><small>{dateTime(item.created_at)}</small></div></button>) : <span className="notification-empty">اعلان تازه‌ای ندارید</span>}</div></div>}
+              {notificationsOpen && <div className="notification-menu"><header><div><strong>اعلان‌ها</strong><small>{notifications.data?.unread_count || 0} خوانده‌نشده</small></div>{(notifications.data?.unread_count || 0) > 0 && <button onClick={() => readAll.mutate()}>خواندن همه</button>}</header><div className="notification-list">{notifications.isLoading ? <span className="notification-empty">در حال دریافت…</span> : notifications.data?.items.length ? notifications.data.items.map((item) => <button key={item.id} className={item.is_read ? "read" : ""} onClick={() => { if (!item.is_read) readNotification.mutate(item.id); if (item.entity_type === "daily_need") navigate("/kitchen?tab=needs"); if (item.entity_type === "attendance") navigate("/staff?tab=attendance"); if (user.role === "root" && ["staff_point", "payroll_statement"].includes(item.entity_type || "")) navigate("/payroll"); setNotificationsOpen(false); }}><span className="notification-dot" /><div><strong>{item.title}</strong><p>{item.message}</p><small>{dateTime(item.created_at)}</small></div></button>) : <span className="notification-empty">اعلان تازه‌ای ندارید</span>}</div></div>}
             </div>
             <div className="profile-wrap">
               <button className="profile-button" onClick={() => { setProfileOpen(!profileOpen); setNotificationsOpen(false); }}>
@@ -142,6 +163,7 @@ export function AppLayout() {
         </header>
         <main className="page-content"><Outlet /></main>
       </div>
+      <CheckoutChecklistModal open={checkoutOpen} items={attendance.data.checkout_checklist_items} pending={attendanceMutation.isPending} error={attendanceError} onClose={() => { if (!attendanceMutation.isPending) { setCheckoutOpen(false); setAttendanceError(""); } }} onSubmit={(itemIds) => attendanceMutation.mutate({ action: "check-out", itemIds })} />
     </div>
   );
 }

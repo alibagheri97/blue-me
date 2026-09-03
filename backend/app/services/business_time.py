@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
@@ -18,14 +18,24 @@ def business_datetime(value: datetime) -> datetime:
     return utc_value.astimezone(business_timezone())
 
 
+def business_date(value: datetime | None = None) -> date:
+    """Return the operating date after applying the configured day cut-off."""
+    localized = business_datetime(value or datetime.now(UTC))
+    return (localized - timedelta(hours=settings.business_day_start_hour)).date()
+
+
 def business_today() -> date:
-    return datetime.now(UTC).astimezone(business_timezone()).date()
+    return business_date()
 
 
 def day_bounds(value: date) -> tuple[datetime, datetime]:
     timezone = business_timezone()
-    local_start = datetime.combine(value, time.min, tzinfo=timezone)
-    local_end = datetime.combine(value, time.max, tzinfo=timezone)
+    local_start = datetime.combine(
+        value,
+        time(hour=settings.business_day_start_hour),
+        tzinfo=timezone,
+    )
+    local_end = local_start + timedelta(days=1, microseconds=-1)
     return (
         local_start.astimezone(UTC).replace(tzinfo=None),
         local_end.astimezone(UTC).replace(tzinfo=None),
@@ -34,4 +44,5 @@ def day_bounds(value: date) -> tuple[datetime, datetime]:
 
 def local_day_bounds(value: date) -> tuple[datetime, datetime]:
     """Bounds for business-local values intentionally stored without a timezone."""
-    return datetime.combine(value, time.min), datetime.combine(value, time.max)
+    start = datetime.combine(value, time(hour=settings.business_day_start_hour))
+    return start, start + timedelta(days=1, microseconds=-1)

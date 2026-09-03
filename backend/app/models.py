@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -64,11 +66,40 @@ class OrderStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class OrderType(str, enum.Enum):
+    DINE_IN = "dine_in"
+    TAKEAWAY = "takeaway"
+
+
 class PaymentMethod(str, enum.Enum):
     CASH = "cash"
     CARD = "card"
     ONLINE = "online"
     OTHER = "other"
+
+
+class ChecklistPhase(str, enum.Enum):
+    ENTRY = "entry"
+    EXIT = "exit"
+
+
+class CompensationType(str, enum.Enum):
+    SALARY = "salary"
+    PROFIT_SHARE = "profit_share"
+
+
+class PointSource(str, enum.Enum):
+    MANUAL = "manual"
+    CHECK_IN = "check_in"
+    ENTRY_CHECKLIST = "entry_checklist"
+    CHECK_OUT = "check_out"
+    EXIT_CHECKLIST = "exit_checklist"
+    WORK_HOURS = "work_hours"
+
+
+class PayrollStatus(str, enum.Enum):
+    DRAFT = "draft"
+    PAID = "paid"
 
 
 class NeedPriority(str, enum.Enum):
@@ -283,6 +314,13 @@ class Customer(TimestampMixin, Base):
 
 class StaffMember(TimestampMixin, Base):
     __tablename__ = "staff_members"
+    __table_args__ = (
+        CheckConstraint(
+            "pay_rate >= 0 AND (pay_type <> 'PROFIT_SHARE' OR pay_rate <= 100)",
+            name="ck_staff_pay_rate",
+        ),
+        CheckConstraint("point_value >= 0", name="ck_staff_point_value"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(160), index=True)
@@ -294,6 +332,13 @@ class StaffMember(TimestampMixin, Base):
         ForeignKey("users.id"), unique=True, nullable=True, index=True
     )
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    pay_type: Mapped[CompensationType] = mapped_column(
+        Enum(CompensationType, native_enum=False, length=24),
+        default=CompensationType.SALARY,
+        index=True,
+    )
+    pay_rate: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    point_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     user: Mapped[User | None] = relationship(back_populates="staff_profile")
     orders: Mapped[list[Order]] = relationship(back_populates="staff_member")
@@ -334,6 +379,184 @@ class AttendanceRecord(Base):
     checked_out_by: Mapped[User | None] = relationship(
         foreign_keys=[checked_out_by_id]
     )
+    checklist_completions: Mapped[list[AttendanceChecklistCompletion]] = relationship(
+        back_populates="attendance_record", cascade="all, delete-orphan"
+    )
+    entry_checklist_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    exit_checklist_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
+
+class CheckInChecklistItem(TimestampMixin, Base):
+    __tablename__ = "check_in_checklist_items"
+    __table_args__ = (
+        Index(
+            "ix_check_in_checklist_user_active_order",
+            "user_id",
+            "is_active",
+            "sort_order",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    phase: Mapped[ChecklistPhase] = mapped_column(
+        Enum(ChecklistPhase, native_enum=False, length=16),
+        default=ChecklistPhase.ENTRY,
+        index=True,
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    completions: Mapped[list[AttendanceChecklistCompletion]] = relationship(
+        back_populates="checklist_item"
+    )
+
+
+class AttendanceChecklistCompletion(Base):
+    __tablename__ = "attendance_checklist_completions"
+    __table_args__ = (
+        UniqueConstraint(
+            "attendance_record_id",
+            "checklist_item_id",
+            name="uq_attendance_checklist_record_item",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attendance_record_id: Mapped[int] = mapped_column(
+        ForeignKey("attendance_records.id", ondelete="CASCADE"), index=True
+    )
+    checklist_item_id: Mapped[int] = mapped_column(
+        ForeignKey("check_in_checklist_items.id"), index=True
+    )
+    title_snapshot: Mapped[str] = mapped_column(String(200))
+    phase: Mapped[ChecklistPhase] = mapped_column(
+        Enum(ChecklistPhase, native_enum=False, length=16),
+        default=ChecklistPhase.ENTRY,
+        index=True,
+    )
+    completed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    attendance_record: Mapped[AttendanceRecord] = relationship(
+        back_populates="checklist_completions"
+    )
+    checklist_item: Mapped[CheckInChecklistItem] = relationship(
+        back_populates="completions"
+    )
+
+
+class PointPolicy(TimestampMixin, Base):
+    __tablename__ = "point_policies"
+    __table_args__ = (
+        CheckConstraint("check_in_points >= 0", name="ck_point_policy_check_in"),
+        CheckConstraint(
+            "entry_checklist_points >= 0", name="ck_point_policy_entry_checklist"
+        ),
+        CheckConstraint("check_out_points >= 0", name="ck_point_policy_check_out"),
+        CheckConstraint(
+            "exit_checklist_points >= 0", name="ck_point_policy_exit_checklist"
+        ),
+        CheckConstraint("work_hour_points >= 0", name="ck_point_policy_work_hour"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    check_in_points: Mapped[int] = mapped_column(Integer, default=1)
+    entry_checklist_points: Mapped[int] = mapped_column(Integer, default=2)
+    check_out_points: Mapped[int] = mapped_column(Integer, default=1)
+    exit_checklist_points: Mapped[int] = mapped_column(Integer, default=2)
+    work_hour_points: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+
+
+class StaffPointEntry(Base):
+    __tablename__ = "staff_point_entries"
+    __table_args__ = (
+        CheckConstraint("points <> 0", name="ck_staff_point_nonzero"),
+        Index("ix_staff_points_staff_created", "staff_member_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_member_id: Mapped[int] = mapped_column(
+        ForeignKey("staff_members.id"), index=True
+    )
+    points: Mapped[int] = mapped_column(Integer)
+    source: Mapped[PointSource] = mapped_column(
+        Enum(PointSource, native_enum=False, length=24), index=True
+    )
+    reason: Mapped[str] = mapped_column(String(500))
+    attendance_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("attendance_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reference_key: Mapped[str | None] = mapped_column(
+        String(120), unique=True, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    staff_member: Mapped[StaffMember] = relationship()
+    created_by: Mapped[User | None] = relationship()
+
+
+class PayrollStatement(Base):
+    __tablename__ = "payroll_statements"
+    __table_args__ = (
+        UniqueConstraint(
+            "staff_member_id",
+            "period_start",
+            "period_end",
+            name="uq_payroll_staff_period",
+        ),
+        CheckConstraint("period_end >= period_start", name="ck_payroll_period"),
+        CheckConstraint("pay_rate >= 0", name="ck_payroll_pay_rate"),
+        CheckConstraint("base_compensation >= 0", name="ck_payroll_base"),
+        CheckConstraint("payable_total >= 0", name="ck_payroll_total"),
+        Index("ix_payroll_period_status", "period_start", "period_end", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_member_id: Mapped[int] = mapped_column(
+        ForeignKey("staff_members.id"), index=True
+    )
+    period_start: Mapped[date] = mapped_column(Date, index=True)
+    period_end: Mapped[date] = mapped_column(Date, index=True)
+    pay_type: Mapped[CompensationType] = mapped_column(
+        Enum(CompensationType, native_enum=False, length=24), index=True
+    )
+    pay_rate: Mapped[Decimal] = mapped_column(Numeric(16, 2))
+    profit_basis: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    base_compensation: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    points_total: Mapped[int] = mapped_column(Integer, default=0)
+    point_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    points_adjustment: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    payable_total: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    worked_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    attendance_count: Mapped[int] = mapped_column(Integer, default=0)
+    entry_checklists_completed: Mapped[int] = mapped_column(Integer, default=0)
+    exit_checklists_completed: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[PayrollStatus] = mapped_column(
+        Enum(PayrollStatus, native_enum=False, length=16),
+        default=PayrollStatus.DRAFT,
+        index=True,
+    )
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    paid_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    staff_member: Mapped[StaffMember] = relationship()
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    paid_by: Mapped[User | None] = relationship(foreign_keys=[paid_by_id])
 
 
 class MenuCategory(TimestampMixin, Base):
@@ -398,6 +621,26 @@ class RecipeIngredient(Base):
     inventory_item: Mapped[InventoryItem] = relationship()
 
 
+class TakeawaySupply(TimestampMixin, Base):
+    __tablename__ = "takeaway_supplies"
+    __table_args__ = (
+        UniqueConstraint(
+            "inventory_item_id", name="uq_takeaway_supply_inventory_item"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    inventory_item_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_items.id")
+    )
+    quantity_per_package: Mapped[Decimal] = mapped_column(
+        Numeric(14, 3), default=Decimal("1")
+    )
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    inventory_item: Mapped[InventoryItem] = relationship()
+    created_by: Mapped[User] = relationship()
+
+
 class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (Index("ix_order_status_created", "status", "created_at"),)
@@ -414,12 +657,29 @@ class Order(Base):
     )
     staff_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     is_staff_meal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    order_type: Mapped[OrderType] = mapped_column(
+        Enum(OrderType, native_enum=False),
+        default=OrderType.DINE_IN,
+        server_default=OrderType.DINE_IN.name,
+        index=True,
+    )
+    takeaway_package_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    takeaway_cost: Mapped[Decimal] = mapped_column(
+        Numeric(16, 2), default=Decimal("0"), server_default="0"
+    )
     subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     discount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     total: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     payment_method: Mapped[PaymentMethod] = mapped_column(Enum(PaymentMethod, native_enum=False))
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     customer: Mapped[Customer | None] = relationship()

@@ -22,15 +22,25 @@ def staff_stats_subquery():
             Order.staff_member_id.label("staff_member_id"),
             Order.subtotal.label("menu_value"),
             Order.created_at.label("created_at"),
-            func.coalesce(func.sum(OrderItem.line_cost), 0).label("estimated_cost"),
+            (
+                func.coalesce(func.sum(OrderItem.line_cost), 0)
+                + Order.takeaway_cost
+            ).label("estimated_cost"),
         )
         .join(OrderItem, OrderItem.order_id == Order.id)
         .where(
             Order.is_staff_meal.is_(True),
             Order.staff_member_id.is_not(None),
             Order.status != OrderStatus.CANCELLED,
+            Order.is_deleted.is_(False),
         )
-        .group_by(Order.id, Order.staff_member_id, Order.subtotal, Order.created_at)
+        .group_by(
+            Order.id,
+            Order.staff_member_id,
+            Order.subtotal,
+            Order.takeaway_cost,
+            Order.created_at,
+        )
         .subquery()
     )
     return (
@@ -248,7 +258,11 @@ def staff_order_history(
     query = (
         select(Order)
         .options(selectinload(Order.items))
-        .where(Order.staff_member_id == staff_id, Order.is_staff_meal.is_(True))
+        .where(
+            Order.staff_member_id == staff_id,
+            Order.is_staff_meal.is_(True),
+            Order.is_deleted.is_(False),
+        )
         .order_by(Order.created_at.desc())
         .limit(limit)
     )

@@ -5,6 +5,8 @@ export const quantity = (value: string | number | null | undefined) =>
   new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 3 }).format(Number(value || 0));
 
 export const BUSINESS_TIME_ZONE = "Asia/Tehran";
+export const BUSINESS_DAY_START_HOUR = 5;
+const PERSIAN_DATE_LOCALE = "fa-IR-u-ca-persian-nu-persian";
 
 const apiDate = (value: string) => {
   const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
@@ -19,7 +21,7 @@ const isoDateFormatter = new Intl.DateTimeFormat("en-CA", {
 });
 
 export const businessDate = (offsetDays = 0) => {
-  const now = new Date();
+  const now = new Date(Date.now() - BUSINESS_DAY_START_HOUR * 60 * 60 * 1000);
   const parts = Object.fromEntries(
     isoDateFormatter
       .formatToParts(now)
@@ -39,14 +41,14 @@ export const dateOnly = (
 ) => {
   if (!value) return "—";
   const plainDate = value.slice(0, 10);
-  return new Intl.DateTimeFormat("fa-IR", { ...options, timeZone: BUSINESS_TIME_ZONE }).format(
+  return new Intl.DateTimeFormat(PERSIAN_DATE_LOCALE, { ...options, timeZone: BUSINESS_TIME_ZONE }).format(
     new Date(`${plainDate}T12:00:00Z`),
   );
 };
 
 export const timeOnly = (value: string | null | undefined) =>
   value
-    ? new Intl.DateTimeFormat("fa-IR", {
+    ? new Intl.DateTimeFormat(PERSIAN_DATE_LOCALE, {
         timeZone: BUSINESS_TIME_ZONE,
         hour: "2-digit",
         minute: "2-digit",
@@ -55,7 +57,7 @@ export const timeOnly = (value: string | null | undefined) =>
 
 export const dateTime = (value: string | null | undefined) =>
   value
-    ? new Intl.DateTimeFormat("fa-IR", {
+    ? new Intl.DateTimeFormat(PERSIAN_DATE_LOCALE, {
         dateStyle: "medium",
         timeStyle: "short",
         timeZone: BUSINESS_TIME_ZONE,
@@ -91,8 +93,10 @@ export const statusLabel: Record<string, string> = {
   normal: "عادی",
   high: "زیاد",
   urgent: "فوری",
-  card: "کارت‌خوان",
+  card: "انتقال به کارت",
   cash: "نقدی",
   online: "آنلاین",
   other: "سایر",
+  dine_in: "سرو داخل",
+  takeaway: "بیرون‌بر",
 };

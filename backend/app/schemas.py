@@ -6,11 +6,16 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 from app.models import (
     ApprovalStatus,
+    ChecklistPhase,
+    CompensationType,
     NeedSource,
     NeedPriority,
     OrderStatus,
+    OrderType,
     PaymentMethod,
     PriceType,
+    PayrollStatus,
+    PointSource,
     PurchaseStatus,
     UserRole,
 )
@@ -360,6 +365,11 @@ class CustomerCreate(BaseModel):
     phone: str = Field(min_length=5, max_length=32, pattern=r"^[0-9+() -]+$")
     notes: str | None = Field(default=None, max_length=500)
 
+    @field_validator("phone", mode="before")
+    @classmethod
+    def normalize_phone(cls, value: object) -> object:
+        return normalize_phone_digits(value)
+
 
 class CustomerRead(ORMModel):
     id: int
@@ -419,11 +429,105 @@ class StaffMemberRead(ORMModel):
     last_meal_at: datetime | None = None
 
 
+class CompensationContractUpdate(BaseModel):
+    pay_type: CompensationType
+    pay_rate: Decimal = Field(ge=0, max_digits=16, decimal_places=2)
+    point_value: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+
+    @model_validator(mode="after")
+    def valid_exclusive_pay_rate(self):
+        if self.pay_type == CompensationType.PROFIT_SHARE and self.pay_rate > 100:
+            raise ValueError("Profit share percentage cannot exceed 100")
+        return self
+
+
+class PayrollStaffRead(ORMModel):
+    id: int
+    name: str
+    position: str | None
+    user_id: int | None
+    is_active: bool
+    pay_type: CompensationType
+    pay_rate: Decimal
+    point_value: Decimal
+    user: UserBrief | None = None
+
+
 class AttendanceStaffRead(ORMModel):
     id: int
     name: str
     position: str | None
     user_id: int | None
+
+
+class CheckInChecklistItemCreate(BaseModel):
+    user_id: int
+    phase: ChecklistPhase = ChecklistPhase.ENTRY
+    title: str = Field(min_length=2, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def clean_title(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class CheckInChecklistItemUpdate(BaseModel):
+    phase: ChecklistPhase | None = None
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def clean_title(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def at_least_one_change(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one checklist field is required")
+        return self
+
+
+class CheckInChecklistItemRead(ORMModel):
+    id: int
+    user_id: int
+    title: str
+    description: str | None
+    phase: ChecklistPhase
+    sort_order: int
+    is_active: bool
+    created_by_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChecklistCompletionRequest(BaseModel):
+    checklist_item_ids: list[int] = Field(default_factory=list, max_length=200)
+
+    @field_validator("checklist_item_ids")
+    @classmethod
+    def unique_items(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("Checklist items must be unique")
+        return value
+
+
+class CheckInRequest(BaseModel):
+    """Kept as an empty request model for backwards-compatible clients."""
+
+
+class CheckOutRequest(ChecklistCompletionRequest):
+    pass
+
+
+class AttendanceChecklistCompletionRead(ORMModel):
+    checklist_item_id: int
+    title_snapshot: str
+    phase: ChecklistPhase
+    completed_at: datetime
 
 
 class AttendanceRecordRead(BaseModel):
@@ -436,6 +540,9 @@ class AttendanceRecordRead(BaseModel):
     duration_minutes: int
     is_open: bool
     staff_member: AttendanceStaffRead
+    checklist_completions: list[AttendanceChecklistCompletionRead] = Field(
+        default_factory=list
+    )
 
 
 class AttendanceStatusRead(BaseModel):
@@ -445,6 +552,130 @@ class AttendanceStatusRead(BaseModel):
     current_session: AttendanceRecordRead | None
     last_session: AttendanceRecordRead | None
     worked_minutes_today: int
+    checklist_required: bool
+    checklist_items: list[CheckInChecklistItemRead]
+    entry_allowed: bool
+    entry_checklist_completed: bool
+    checkout_checklist_required: bool
+    checkout_checklist_items: list[CheckInChecklistItemRead]
+
+
+class PointPolicyRead(ORMModel):
+    check_in_points: int
+    entry_checklist_points: int
+    check_out_points: int
+    exit_checklist_points: int
+    work_hour_points: int
+    updated_at: datetime
+
+
+class PointPolicyUpdate(BaseModel):
+    check_in_points: int = Field(ge=0, le=100)
+    entry_checklist_points: int = Field(ge=0, le=100)
+    check_out_points: int = Field(ge=0, le=100)
+    exit_checklist_points: int = Field(ge=0, le=100)
+    work_hour_points: int = Field(ge=0, le=100)
+
+
+class ManualPointCreate(BaseModel):
+    staff_member_id: int
+    points: int = Field(ge=-1000, le=1000)
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("points")
+    @classmethod
+    def nonzero_points(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("Points cannot be zero")
+        return value
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def clean_reason(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class StaffPointEntryRead(ORMModel):
+    id: int
+    staff_member_id: int
+    points: int
+    source: PointSource
+    reason: str
+    attendance_record_id: int | None
+    created_by_id: int | None
+    created_by: UserBrief | None = None
+    created_at: datetime
+
+
+class PayrollCalculationRead(BaseModel):
+    staff_member: PayrollStaffRead
+    period_start: date
+    period_end: date
+    profit_basis: Decimal
+    base_compensation: Decimal
+    points_total: int
+    positive_points: int
+    negative_points: int
+    point_value: Decimal
+    points_adjustment: Decimal
+    payable_total: Decimal
+    worked_minutes: int
+    attendance_count: int
+    entry_checklists_completed: int
+    exit_checklists_completed: int
+
+
+class PayrollStatementCreate(BaseModel):
+    staff_member_id: int
+    period_start: date
+    period_end: date
+
+    @model_validator(mode="after")
+    def valid_period(self):
+        if self.period_start > self.period_end:
+            raise ValueError("Period start must not be after period end")
+        if (self.period_end - self.period_start).days > 366:
+            raise ValueError("Payroll period cannot exceed 367 days")
+        return self
+
+
+class PayrollStatementRead(ORMModel):
+    id: int
+    staff_member_id: int
+    period_start: date
+    period_end: date
+    pay_type: CompensationType
+    pay_rate: Decimal
+    profit_basis: Decimal
+    base_compensation: Decimal
+    points_total: int
+    point_value: Decimal
+    points_adjustment: Decimal
+    payable_total: Decimal
+    worked_minutes: int
+    attendance_count: int
+    entry_checklists_completed: int
+    exit_checklists_completed: int
+    status: PayrollStatus
+    created_by_id: int
+    paid_by_id: int | None
+    created_at: datetime
+    paid_at: datetime | None
+    staff_member: PayrollStaffRead
+
+
+class MyPerformanceRead(BaseModel):
+    staff_member_id: int | None
+    eligible: bool
+    period_start: date
+    period_end: date
+    total_points: int
+    positive_points: int
+    negative_points: int
+    worked_minutes: int
+    attendance_count: int
+    entry_checklists_completed: int
+    exit_checklists_completed: int
 
 
 class AttendanceOverviewRead(BaseModel):
@@ -589,6 +820,35 @@ class KitchenRecipeRead(ORMModel):
     calculated_cost: Decimal = Decimal("0")
 
 
+class TakeawaySupplyCreate(BaseModel):
+    inventory_item_id: int
+    quantity_per_package: PositiveQuantity
+
+
+class TakeawaySupplyUpdate(BaseModel):
+    inventory_item_id: int | None = None
+    quantity_per_package: PositiveQuantity | None = None
+
+    @model_validator(mode="after")
+    def at_least_one_change(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one field is required")
+        if any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("Takeaway supply fields cannot be null")
+        return self
+
+
+class TakeawaySupplyRead(ORMModel):
+    id: int
+    inventory_item_id: int
+    quantity_per_package: Decimal
+    calculated_cost: Decimal
+    max_packages_available: int
+    inventory_item: InventoryItemRead
+    created_at: datetime
+    updated_at: datetime
+
+
 class OrderItemCreate(BaseModel):
     menu_item_id: int
     quantity: int = Field(ge=1, le=999)
@@ -601,6 +861,8 @@ class OrderCreate(BaseModel):
     staff_member_id: int | None = None
     discount: PositiveMoney = Decimal("0")
     payment_method: PaymentMethod = PaymentMethod.CARD
+    order_type: OrderType = OrderType.DINE_IN
+    takeaway_package_count: int | None = Field(default=None, ge=1, le=999)
     notes: str | None = Field(default=None, max_length=500)
     items: list[OrderItemCreate] = Field(min_length=1, max_length=100)
 
@@ -610,14 +872,34 @@ class OrderCreate(BaseModel):
             self.customer_id is not None or self.customer is not None
         ):
             raise ValueError("A staff meal cannot also be assigned to a customer")
+        if (
+            self.order_type == OrderType.DINE_IN
+            and self.takeaway_package_count is not None
+        ):
+            raise ValueError("Dine-in orders cannot have takeaway packages")
         return self
 
 
 class OrderUpdate(BaseModel):
+    customer_id: int | None = None
+    customer: CustomerCreate | None = None
     discount: PositiveMoney = Decimal("0")
     payment_method: PaymentMethod = PaymentMethod.CARD
+    order_type: OrderType | None = None
+    takeaway_package_count: int | None = Field(default=None, ge=1, le=999)
     notes: str | None = Field(default=None, max_length=500)
     items: list[OrderItemCreate] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def one_customer_target(self):
+        if self.customer_id is not None and self.customer is not None:
+            raise ValueError("Select an existing customer or create a new one, not both")
+        if (
+            self.order_type == OrderType.DINE_IN
+            and self.takeaway_package_count is not None
+        ):
+            raise ValueError("Dine-in orders cannot have takeaway packages")
+        return self
 
 
 class OrderItemRead(ORMModel):
@@ -641,6 +923,9 @@ class OrderRead(ORMModel):
     staff_member_id: int | None
     staff_name: str | None
     is_staff_meal: bool
+    order_type: OrderType
+    takeaway_package_count: int
+    takeaway_cost: Decimal
     subtotal: Decimal
     discount: Decimal
     total: Decimal
@@ -670,6 +955,8 @@ class KitchenOrderRead(ORMModel):
     staff_member_id: int | None
     staff_name: str | None
     is_staff_meal: bool
+    order_type: OrderType
+    takeaway_package_count: int
     notes: str | None
     created_at: datetime
     updated_at: datetime

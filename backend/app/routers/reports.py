@@ -17,6 +17,7 @@ from app.models import (
     Notification,
     Order,
     OrderStatus,
+    PaymentMethod,
     PriceChangeRequest,
     PurchaseReceipt,
     PurchaseStatus,
@@ -26,6 +27,7 @@ from app.models import (
 )
 from app.schemas import DashboardSummary
 from app.services.business_time import (
+    business_date,
     business_datetime,
     business_today,
     day_bounds,
@@ -37,11 +39,50 @@ router = APIRouter(tags=["reports"])
 financial_roles = require_roles(UserRole.ROOT, UserRole.ACCOUNTING_MANAGER)
 
 
+def empty_payment_breakdown() -> dict[str, dict[str, Decimal | int | str]]:
+    return {
+        method.value: {
+            "method": method.value,
+            "amount": Decimal("0"),
+            "orders": 0,
+        }
+        for method in PaymentMethod
+    }
+
+
+def add_payment(
+    breakdown: dict[str, dict[str, Decimal | int | str]], order: Order
+) -> None:
+    method = order.payment_method.value
+    breakdown[method]["amount"] += order.total
+    breakdown[method]["orders"] += 1
+
+
+def finalize_payment_breakdown(
+    breakdown: dict[str, dict[str, Decimal | int | str]], total: Decimal
+) -> list[dict[str, Decimal | int | str]]:
+    return [
+        {
+            **breakdown[method.value],
+            "amount": Decimal(breakdown[method.value]["amount"]).quantize(
+                Decimal("0.01")
+            ),
+            "share_percent": (
+                Decimal(breakdown[method.value]["amount"]) / total * 100
+            ).quantize(Decimal("0.01"))
+            if total > 0
+            else Decimal("0"),
+        }
+        for method in PaymentMethod
+    ]
+
+
 def successful_orders_query(start: datetime, end: datetime):
     return select(Order).where(
         Order.created_at.between(start, end),
         Order.status != OrderStatus.CANCELLED,
         Order.is_staff_meal.is_(False),
+        Order.is_deleted.is_(False),
     )
 
 
@@ -67,7 +108,10 @@ def dashboard(
         db.scalars(
             select(Order)
             .options(selectinload(Order.items))
-            .where(Order.is_staff_meal.is_(False))
+            .where(
+                Order.is_staff_meal.is_(False),
+                Order.is_deleted.is_(False),
+            )
             .order_by(Order.created_at.desc())
             .limit(6)
         ).unique()
@@ -135,7 +179,10 @@ def dashboard(
         orders_in_kitchen=db.scalar(
             select(func.count())
             .select_from(Order)
-            .where(Order.status.in_([OrderStatus.CONFIRMED, OrderStatus.PREPARING]))
+            .where(
+                Order.status.in_([OrderStatus.CONFIRMED, OrderStatus.PREPARING]),
+                Order.is_deleted.is_(False),
+            )
         )
         or 0,
         kitchen_workflow_enabled=system_settings.kitchen_workflow_enabled,
@@ -177,7 +224,11 @@ def reports_overview(
 
     menu_ids = {line.menu_item_id for order in orders for line in order.items}
     cogs = sum(
-        (line.line_cost for order in orders for line in order.items),
+        (
+            sum((line.line_cost for line in order.items), Decimal("0"))
+            + Decimal(order.takeaway_cost)
+            for order in orders
+        ),
         Decimal("0"),
     )
     purchase_start_dt, _ = local_day_bounds(start_date)
@@ -193,9 +244,11 @@ def reports_overview(
             "date": (start_date + timedelta(days=index)).isoformat(),
             "revenue": Decimal("0"),
             "orders": 0,
+            "payment_breakdown": empty_payment_breakdown(),
         }
         for index in range(days)
     }
+    payment_breakdown = empty_payment_breakdown()
     product_stats: dict[int, dict] = {}
     hourly = {
         hour: {"hour": hour, "revenue": Decimal("0"), "orders": 0} for hour in range(24)
@@ -211,9 +264,11 @@ def reports_overview(
     }
     for order in orders:
         local_created_at = business_datetime(order.created_at)
-        key = local_created_at.date().isoformat()
+        key = business_date(order.created_at).isoformat()
         daily[key]["revenue"] += order.total
         daily[key]["orders"] += 1
+        add_payment(payment_breakdown, order)
+        add_payment(daily[key]["payment_breakdown"], order)
         hourly[local_created_at.hour]["revenue"] += order.total
         hourly[local_created_at.hour]["orders"] += 1
         if order.customer_id:
@@ -278,6 +333,16 @@ def reports_overview(
         Decimal("0"),
     )
 
+    daily_sales = [
+        {
+            **summary,
+            "payment_breakdown": finalize_payment_breakdown(
+                summary["payment_breakdown"], Decimal(summary["revenue"])
+            ),
+        }
+        for summary in daily.values()
+    ]
+
     return {
         "period": {"days": days, "start": start_date, "end": end_date},
         "kpis": {
@@ -304,7 +369,8 @@ def reports_overview(
                 1 for count in customer_counts.values() if count > 1
             ),
         },
-        "daily_sales": list(daily.values()),
+        "payment_breakdown": finalize_payment_breakdown(payment_breakdown, revenue),
+        "daily_sales": daily_sales,
         "hourly_demand": list(hourly.values()),
         "product_performance": sorted(
             product_stats.values(), key=lambda item: item["revenue"], reverse=True

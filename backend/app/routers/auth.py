@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.core.security import create_access_token, verify_password
 from app.db import get_db
-from app.deps import client_ip, get_current_user
+from app.deps import client_ip, get_authenticated_user
 from app.models import User
 from app.schemas import LoginRequest, TokenResponse, UserRead
 
@@ -48,6 +48,5 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
 
 @router.get("/me", response_model=UserRead)
-def me(user: User = Depends(get_current_user)) -> User:
+def me(user: User = Depends(get_authenticated_user)) -> User:
     return user
-

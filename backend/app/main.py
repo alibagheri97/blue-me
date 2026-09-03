@@ -16,10 +16,12 @@ from app.routers import (
     kitchen,
     notifications,
     orders,
+    payroll,
     purchases,
     reports,
     settings as system_settings,
     staff,
+    takeaway,
     users,
 )
 
@@ -51,6 +53,8 @@ app.include_router(inventory.router)
 app.include_router(purchases.router)
 app.include_router(orders.router)
 app.include_router(staff.router)
+app.include_router(payroll.router)
+app.include_router(takeaway.router)
 app.include_router(kitchen.router)
 app.include_router(reports.router)
 app.include_router(system_settings.router)
