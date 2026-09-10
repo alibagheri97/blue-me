@@ -21,9 +21,9 @@ interface ReportData {
 
 interface PaymentBreakdown { method: "card" | "cash" | "online" | "other"; amount: string; orders: number; share_percent: string }
 
-const palette = ["#2563eb", "#06b6d4", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"];
+const palette = ["#2563eb", "#06b6d4", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#14b8a6"];
 const paymentMethods = [
-  { method: "card", label: "انتقال به کارت", icon: CreditCard, tone: "blue" },
+  { method: "card", label: "کارت خوان", icon: CreditCard, tone: "blue" },
   { method: "cash", label: "نقدی", icon: Banknote, tone: "green" },
   { method: "online", label: "آنلاین", icon: Globe2, tone: "violet" },
   { method: "other", label: "سایر", icon: CircleEllipsis, tone: "amber" },
@@ -37,6 +37,14 @@ export default function ReportsPage() {
   const data = report.data;
   const growth = Number(data.kpis.revenue_growth_percent);
   const peak = [...data.hourly_demand].sort((a, b) => Number(b.revenue) - Number(a.revenue))[0];
+  const categoryPerformance = data.category_performance
+    .map((item) => ({
+      ...item,
+      category: item.category === "Unknown" ? "بدون دسته‌بندی" : item.category,
+      revenueValue: Number(item.revenue),
+    }))
+    .filter((item) => Number.isFinite(item.revenueValue) && item.revenueValue > 0);
+  const categoryRevenue = categoryPerformance.reduce((total, item) => total + item.revenueValue, 0);
 
   return (
     <div className="page-stack reports-page">
@@ -61,7 +69,34 @@ export default function ReportsPage() {
         <article className="panel chart-panel sales-chart"><header className="panel-header"><div><h2>روند فروش</h2><p>درآمد و تعداد سفارش روزانه</p></div><BarChart3 size={20}/></header><ResponsiveContainer width="100%" height={300}><AreaChart data={data.daily_sales}><defs><linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2563eb" stopOpacity={.32}/><stop offset="95%" stopColor="#2563eb" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e8edf4"/><XAxis dataKey="date" tickFormatter={(v) => dateOnly(String(v), { month: "short", day: "numeric" })} tick={{fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:11}} axisLine={false} tickLine={false}/><Tooltip labelFormatter={(value) => dateOnly(String(value), { weekday: "long", month: "long", day: "numeric", year: "numeric" })} formatter={(value) => money(Number(value))}/><Area name="درآمد" type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2.5} fill="url(#salesFill)"/></AreaChart></ResponsiveContainer></article>
         <article className="panel insight-panel"><header className="panel-header"><div><h2>پیشنهادهای تصمیم‌گیری</h2><p>تحلیل خودکار داده‌های عملیاتی شما</p></div><Sparkles size={20}/></header><div className="insight-list">{data.insights.map((insight, index) => <div className={`insight insight-${insight.tone}`} key={index}><span>{insight.tone === "warning" || insight.tone === "critical" ? <AlertTriangle/> : insight.tone === "positive" ? <ArrowUpRight/> : <Lightbulb/>}</span><div><strong>{translateInsightTitle(insight.title)}</strong><p>{translateInsightMessage(insight.message)}</p></div></div>)}</div></article>
         <article className="panel chart-panel demand-chart"><header className="panel-header"><div><h2>تقاضا بر اساس ساعت</h2><p>{data.kpis.orders ? `ساعت اوج فروش حدود ${quantity(peak.hour)}:۰۰ است` : "در انتظار ثبت سفارش"}</p></div><Clock3 size={20}/></header><ResponsiveContainer width="100%" height={250}><BarChart data={data.hourly_demand}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e8edf4"/><XAxis dataKey="hour" tickFormatter={(v) => `${quantity(v)}:۰۰`} tick={{fontSize:10}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:11}} axisLine={false} tickLine={false}/><Tooltip labelFormatter={(v) => `${quantity(Number(v))}:۰۰`} formatter={(value) => money(Number(value))}/><Bar name="درآمد" dataKey="revenue" fill="#06b6d4" radius={[4,4,0,0]}/></BarChart></ResponsiveContainer></article>
-        <article className="panel chart-panel category-chart"><header className="panel-header"><div><h2>ترکیب درآمد</h2><p>سهم هر دسته از منو</p></div></header>{data.category_performance.length ? <div className="pie-wrap"><ResponsiveContainer width="55%" height={240}><PieChart><Pie data={data.category_performance} dataKey="revenue" nameKey="category" innerRadius={58} outerRadius={90} paddingAngle={3}>{data.category_performance.map((_, index) => <Cell key={index} fill={palette[index % palette.length]}/>)}</Pie><Tooltip formatter={(value) => money(Number(value))}/></PieChart></ResponsiveContainer><div className="chart-legend">{data.category_performance.slice(0,6).map((item,index) => <span key={item.category}><i style={{background:palette[index%palette.length]}}/><b>{item.category}</b><small>{money(item.revenue)}</small></span>)}</div></div> : <EmptyState icon={<PackageSearch/>} title="داده‌ای برای دسته‌بندی‌ها نیست" text="پس از ثبت سفارش، ترکیب درآمد نمایش داده می‌شود."/>}</article>
+        <article className="panel chart-panel category-chart">
+          <header className="panel-header"><div><h2>ترکیب درآمد</h2><p>سهم هر دسته از منو</p></div></header>
+          {categoryPerformance.length ? (
+            <div className="pie-wrap">
+              <div className="category-pie" aria-label="نمودار سهم درآمد دسته‌های منو">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={categoryPerformance} dataKey="revenueValue" nameKey="category" innerRadius={58} outerRadius={90} paddingAngle={3} stroke="#fff" strokeWidth={2} isAnimationActive={false}>
+                      {categoryPerformance.map((item, index) => <Cell key={item.category} fill={palette[index % palette.length]}/>) }
+                    </Pie>
+                    <Tooltip formatter={(value) => [money(Number(value)), "درآمد"]}/>
+                  </PieChart>
+                </ResponsiveContainer>
+                <span className="pie-center"><strong>{quantity(categoryPerformance.length)}</strong><small>دسته فعال</small></span>
+              </div>
+              <div className="chart-legend">
+                {categoryPerformance.map((item,index) => (
+                  <span key={item.category}>
+                    <i style={{background:palette[index%palette.length]}}/>
+                    <b>{item.category}</b>
+                    <small>{quantity((item.revenueValue / categoryRevenue) * 100)}٪</small>
+                    <em>{money(item.revenueValue)}</em>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : <EmptyState icon={<PackageSearch/>} title="داده‌ای برای دسته‌بندی‌ها نیست" text="پس از ثبت سفارش، ترکیب درآمد نمایش داده می‌شود."/>}
+        </article>
       </section>
       <section className="panel performance-table"><header className="panel-header"><div><h2>عملکرد محصولات</h2><p>درآمد، تعداد فروش، هزینه و حاشیه سود برآوردی</p></div></header>{data.product_performance.length ? <div className="responsive-table"><table><thead><tr><th>رتبه</th><th>محصول</th><th>تعداد فروش</th><th>درآمد</th><th>هزینه برآوردی</th><th>سود ناخالص</th><th>حاشیه سود</th></tr></thead><tbody>{data.product_performance.map((item,index) => <tr key={item.id}><td><span className={`rank rank-${index+1}`}>{quantity(index+1)}</span></td><td><strong>{item.name}</strong></td><td>{quantity(item.quantity)}</td><td>{money(item.revenue)}</td><td>{money(item.estimated_cost)}</td><td><strong>{money(item.gross_profit)}</strong></td><td><span className={`margin-value ${Number(item.margin_percent)<30 ? "low":""}`}>{quantity(item.margin_percent)}٪</span></td></tr>)}</tbody></table></div> : <EmptyState icon={<BarChart3/>} title="هنوز داده عملکردی وجود ندارد" text="محصولات منو را به دستور پخت متصل کنید و سفارش ثبت کنید تا حاشیه سود دقیق نمایش داده شود."/>}</section>
       <section className="inventory-health-strip"><div><span className="chip-icon blue"><Boxes/></span><span><small>کالاهای فعال</small><strong>{quantity(data.inventory_health.active_items)}</strong></span></div><div><span className="chip-icon amber"><AlertTriangle/></span><span><small>کالاهای کم‌موجودی</small><strong>{quantity(data.inventory_health.low_stock_items)}</strong></span></div><div><span className="chip-icon violet"><PackageSearch/></span><span><small>ارزش موجودی کم‌گردش</small><strong>{money(data.inventory_health.slow_moving_value)}</strong></span></div><div><span className="chip-icon green"><Target/></span><span><small>سفارش مشتریان شناخته‌شده</small><strong>{quantity(data.kpis.known_customer_rate_percent)}٪</strong></span></div></section>

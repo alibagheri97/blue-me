@@ -8,13 +8,14 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.audit import record_audit
 from app.db import get_db
-from app.deps import client_ip, require_roles
+from app.deps import client_ip, require_roles, require_sections
 from app.models import (
     InventoryItem,
     MovementType,
     PurchaseLine,
     PurchaseReceipt,
     PurchaseStatus,
+    SectionKey,
     StockMovement,
     User,
     UserRole,
@@ -29,9 +30,7 @@ from app.services.inventory_alerts import sync_auto_purchase_need
 from app.services.units import unit_factor
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
-purchase_roles = require_roles(
-    UserRole.ROOT, UserRole.STORAGE_MANAGER, UserRole.ACCOUNTING_MANAGER
-)
+purchase_roles = require_sections(SectionKey.PURCHASES)
 root_only = require_roles(UserRole.ROOT)
 CENT = Decimal("0.01")
 FOUR_PLACES = Decimal("0.0001")

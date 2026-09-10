@@ -6,13 +6,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.audit import record_audit
 from app.db import get_db
-from app.deps import client_ip, require_roles
-from app.models import Order, OrderItem, OrderStatus, StaffMember, User, UserRole
+from app.deps import client_ip, require_roles, require_sections
+from app.models import Order, OrderItem, OrderStatus, SectionKey, StaffMember, User, UserRole
 from app.schemas import OrderRead, StaffMemberCreate, StaffMemberRead, StaffMemberUpdate
 
 router = APIRouter(prefix="/staff", tags=["staff"])
 root_only = require_roles(UserRole.ROOT)
-staff_view_roles = require_roles(UserRole.ROOT, UserRole.ACCOUNTING_MANAGER)
+staff_view_roles = require_sections(SectionKey.STAFF)
 
 
 def staff_stats_subquery():

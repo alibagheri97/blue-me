@@ -281,7 +281,7 @@ export function OrderEditModal({
           <div className="edit-order-options">
             {!order.is_staff_meal && <>
               <label><span>تخفیف</span><input type="number" min="0" max={subtotal} value={discount} onChange={(event) => setDiscount(event.target.value)} /></label>
-              <label><span>روش پرداخت</span><select value={payment} onChange={(event) => setPayment(event.target.value as Order["payment_method"])}><option value="card">انتقال به کارت</option><option value="cash">نقدی</option><option value="online">آنلاین</option><option value="other">سایر</option></select></label>
+              <label><span>روش پرداخت</span><select value={payment} onChange={(event) => setPayment(event.target.value as Order["payment_method"])}><option value="card">کارت خوان</option><option value="cash">نقدی</option><option value="online">آنلاین</option><option value="other">سایر</option></select></label>
             </>}
             <label className="wide"><span>توضیح کلی سفارش</span><input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="اختیاری" /></label>
           </div>

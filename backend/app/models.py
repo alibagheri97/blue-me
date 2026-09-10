@@ -37,6 +37,44 @@ class UserRole(str, enum.Enum):
     KITCHEN_MANAGER = "kitchen_manager"
 
 
+class SectionKey(str, enum.Enum):
+    DASHBOARD = "dashboard"
+    STAFF = "staff"
+    PAYROLL = "payroll"
+    INVENTORY = "inventory"
+    PURCHASES = "purchases"
+    MENU = "menu"
+    POS = "pos"
+    KITCHEN = "kitchen"
+    REPORTS = "reports"
+    AUDIT = "audit"
+
+
+ALL_SECTION_KEYS: tuple[SectionKey, ...] = tuple(SectionKey)
+DEFAULT_SECTION_ACCESS: dict[UserRole, tuple[SectionKey, ...]] = {
+    UserRole.ROOT: ALL_SECTION_KEYS,
+    UserRole.STORAGE_MANAGER: (
+        SectionKey.INVENTORY,
+        SectionKey.PURCHASES,
+    ),
+    UserRole.ACCOUNTING_MANAGER: (
+        SectionKey.DASHBOARD,
+        SectionKey.STAFF,
+        SectionKey.INVENTORY,
+        SectionKey.PURCHASES,
+        SectionKey.MENU,
+        SectionKey.POS,
+        SectionKey.REPORTS,
+    ),
+    UserRole.SALES_MANAGER: (SectionKey.MENU,),
+    UserRole.KITCHEN_MANAGER: (SectionKey.KITCHEN,),
+}
+
+
+def default_section_access(role: UserRole) -> list[str]:
+    return [section.value for section in DEFAULT_SECTION_ACCESS[role]]
+
+
 class MovementType(str, enum.Enum):
     RECEIVE = "receive"
     ADJUST = "adjust"
@@ -132,11 +170,29 @@ class User(TimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(160))
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, native_enum=False), index=True)
+    section_access_override: Mapped[list[str] | None] = mapped_column(
+        "section_access", JSON, nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     staff_profile: Mapped[StaffMember | None] = relationship(
         back_populates="user", uselist=False
     )
+
+    @property
+    def section_access(self) -> list[str]:
+        if self.role == UserRole.ROOT:
+            return default_section_access(UserRole.ROOT)
+        if self.section_access_override is None:
+            return default_section_access(self.role)
+        valid_sections = {section.value for section in ALL_SECTION_KEYS}
+        return list(
+            dict.fromkeys(
+                section
+                for section in self.section_access_override
+                if section in valid_sections
+            )
+        )
 
 
 class SystemSetting(TimestampMixin, Base):

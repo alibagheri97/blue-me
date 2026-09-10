@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.audit import record_audit
 from app.db import get_db
-from app.deps import client_ip, require_roles
+from app.deps import client_ip, require_roles, require_sections
 from app.models import (
     ApprovalStatus,
     DailyNeed,
@@ -17,6 +17,7 @@ from app.models import (
     OrderStatus,
     Recipe,
     RecipeIngredient,
+    SectionKey,
     User,
     UserRole,
 )
@@ -34,8 +35,10 @@ from app.schemas import (
 from app.services.business_time import business_today
 
 router = APIRouter(prefix="/kitchen", tags=["kitchen"])
-kitchen_roles = require_roles(UserRole.ROOT, UserRole.KITCHEN_MANAGER)
-needs_view_roles = require_roles(UserRole.ROOT, UserRole.KITCHEN_MANAGER, UserRole.STORAGE_MANAGER)
+kitchen_roles = require_sections(SectionKey.KITCHEN)
+needs_view_roles = require_sections(
+    SectionKey.KITCHEN, SectionKey.INVENTORY, SectionKey.PURCHASES
+)
 root_only = require_roles(UserRole.ROOT)
 
 

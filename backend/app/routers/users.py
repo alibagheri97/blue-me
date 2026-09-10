@@ -49,6 +49,11 @@ def create_user(
         full_name=payload.full_name,
         password_hash=hash_password(payload.password),
         role=payload.role,
+        section_access_override=(
+            [section.value for section in payload.section_access]
+            if payload.section_access is not None
+            else None
+        ),
     )
     db.add(user)
     db.flush()
@@ -73,6 +78,7 @@ def create_user(
             "role": payload.role.value,
             "full_name": payload.full_name,
             "staff_member_id": staff_member.id,
+            "section_access": user.section_access,
         },
         ip_address=client_ip(request),
     )
@@ -94,12 +100,29 @@ def update_user(
         raise HTTPException(status_code=404, detail="User not found")
     if user.role == UserRole.ROOT:
         raise HTTPException(status_code=400, detail="The deployment root cannot be edited here")
-    changes = payload.model_dump(exclude_unset=True, exclude={"password"})
+    before_access = user.section_access
+    role_changed = payload.role is not None and payload.role != user.role
+    changes = payload.model_dump(
+        exclude_unset=True, exclude={"password", "section_access"}
+    )
     for key, value in changes.items():
         setattr(user, key, value)
+    if "section_access" in payload.model_fields_set:
+        user.section_access_override = (
+            [section.value for section in payload.section_access]
+            if payload.section_access is not None
+            else None
+        )
+    elif role_changed:
+        user.section_access_override = None
     if payload.password is not None:
         user.password_hash = hash_password(payload.password)
         changes["password"] = "changed"
+    if before_access != user.section_access:
+        changes["section_access"] = {
+            "before": before_access,
+            "after": user.section_access,
+        }
     if user.id == actor.id and payload.is_active is False:
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
     staff_member = db.scalar(
@@ -119,7 +142,10 @@ def update_user(
         entity_type="user",
         entity_id=user.id,
         summary=f"Updated account {user.username}",
-        details={key: str(value) for key, value in changes.items()},
+        details={
+            key: value if key == "section_access" else str(value)
+            for key, value in changes.items()
+        },
         ip_address=client_ip(request),
     )
     db.commit()

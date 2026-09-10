@@ -1,9 +1,11 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { ShieldOff } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
-import { Spinner } from "./components/ui";
+import { EmptyState, Spinner } from "./components/ui";
 import { AppLayout } from "./components/AppLayout";
-import type { Role } from "./types";
+import { homeForUser, userHasSection } from "./lib/access";
+import type { SectionKey } from "./types";
 
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
@@ -18,21 +20,23 @@ const KitchenPage = lazy(() => import("./pages/KitchenPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const AuditPage = lazy(() => import("./pages/AuditPage"));
 
-function roleHome(role: Role) {
-  if (role === "kitchen_manager") return "/kitchen";
-  if (role === "storage_manager") return "/inventory";
-  if (role === "sales_manager") return "/menu";
-  return "/";
+function SectionRoute({ section, children }: { section: SectionKey; children: React.ReactNode }) {
+  const { user } = useAuth();
+  return user && userHasSection(user, section) ? children : <Navigate to={user ? homeForUser(user) : "/"} replace />;
 }
 
-function RoleRoute({ roles, children }: { roles: Role[]; children: React.ReactNode }) {
+function RootRoute({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  return user && roles.includes(user.role) ? children : <Navigate to={user ? roleHome(user.role) : "/"} replace />;
+  return user?.role === "root" ? children : <Navigate to={user ? homeForUser(user) : "/"} replace />;
 }
 
-function RoleHome() {
+function UserHome() {
   const { user } = useAuth();
-  return <Navigate to={user ? roleHome(user.role) : "/"} replace />;
+  return <Navigate to={user ? homeForUser(user) : "/"} replace />;
+}
+
+function NoAccessPage() {
+  return <section className="panel no-access-panel"><EmptyState icon={<ShieldOff />} title="بخشی برای این حساب فعال نیست" text="مدیرکل می‌تواند از بخش کاربران، دسترسی صفحه‌های موردنیاز شما را فعال کند." /></section>;
 }
 
 export default function App() {
@@ -43,18 +47,19 @@ export default function App() {
   return (
     <Suspense fallback={<div className="center-loader"><Spinner /></div>}><Routes>
       <Route element={<AppLayout />}>
-        <Route path="/" element={<RoleRoute roles={["root", "accounting_manager"]}><DashboardPage /></RoleRoute>} />
-        <Route path="/users" element={<RoleRoute roles={["root"]}><UsersPage /></RoleRoute>} />
-        <Route path="/staff" element={<RoleRoute roles={["root", "accounting_manager"]}><StaffPage /></RoleRoute>} />
-        <Route path="/payroll" element={<RoleRoute roles={["root"]}><PayrollPage /></RoleRoute>} />
-        <Route path="/inventory" element={<RoleRoute roles={["root", "storage_manager"]}><InventoryPage /></RoleRoute>} />
-        <Route path="/purchases" element={<RoleRoute roles={["root", "storage_manager", "accounting_manager"]}><PurchasesPage /></RoleRoute>} />
-        <Route path="/menu" element={<RoleRoute roles={["root", "accounting_manager", "sales_manager"]}><MenuPage /></RoleRoute>} />
-        <Route path="/pos" element={<RoleRoute roles={["root", "accounting_manager"]}><PosPage /></RoleRoute>} />
-        <Route path="/kitchen" element={<RoleRoute roles={["root", "kitchen_manager"]}><KitchenPage /></RoleRoute>} />
-        <Route path="/reports" element={<RoleRoute roles={["root", "accounting_manager"]}><ReportsPage /></RoleRoute>} />
-        <Route path="/audit" element={<RoleRoute roles={["root"]}><AuditPage /></RoleRoute>} />
-        <Route path="*" element={<RoleHome />} />
+        <Route path="/" element={<SectionRoute section="dashboard"><DashboardPage /></SectionRoute>} />
+        <Route path="/users" element={<RootRoute><UsersPage /></RootRoute>} />
+        <Route path="/staff" element={<SectionRoute section="staff"><StaffPage /></SectionRoute>} />
+        <Route path="/payroll" element={<SectionRoute section="payroll"><PayrollPage /></SectionRoute>} />
+        <Route path="/inventory" element={<SectionRoute section="inventory"><InventoryPage /></SectionRoute>} />
+        <Route path="/purchases" element={<SectionRoute section="purchases"><PurchasesPage /></SectionRoute>} />
+        <Route path="/menu" element={<SectionRoute section="menu"><MenuPage /></SectionRoute>} />
+        <Route path="/pos" element={<SectionRoute section="pos"><PosPage /></SectionRoute>} />
+        <Route path="/kitchen" element={<SectionRoute section="kitchen"><KitchenPage /></SectionRoute>} />
+        <Route path="/reports" element={<SectionRoute section="reports"><ReportsPage /></SectionRoute>} />
+        <Route path="/audit" element={<SectionRoute section="audit"><AuditPage /></SectionRoute>} />
+        <Route path="/no-access" element={<NoAccessPage />} />
+        <Route path="*" element={<UserHome />} />
       </Route>
     </Routes></Suspense>
   );

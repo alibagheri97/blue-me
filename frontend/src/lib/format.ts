@@ -93,7 +93,7 @@ export const statusLabel: Record<string, string> = {
   normal: "عادی",
   high: "زیاد",
   urgent: "فوری",
-  card: "انتقال به کارت",
+  card: "کارت خوان",
   cash: "نقدی",
   online: "آنلاین",
   other: "سایر",

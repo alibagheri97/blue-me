@@ -17,6 +17,7 @@ from app.models import (
     PayrollStatus,
     PointSource,
     PurchaseStatus,
+    SectionKey,
     UserRole,
 )
 
@@ -72,11 +73,15 @@ class UserBrief(ORMModel):
     role: UserRole
 
 
+class AuthenticatedUser(UserBrief):
+    section_access: list[SectionKey]
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_at: datetime
-    user: UserBrief
+    user: AuthenticatedUser
 
 
 class UserCreate(BaseModel):
@@ -84,6 +89,7 @@ class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=160)
     password: Password
     role: UserRole
+    section_access: list[SectionKey] | None = None
 
     @field_validator("role")
     @classmethod
@@ -92,12 +98,20 @@ class UserCreate(BaseModel):
             raise ValueError("Create manager accounts here; the deployment root is unique")
         return value
 
+    @field_validator("section_access")
+    @classmethod
+    def unique_sections(
+        cls, value: list[SectionKey] | None
+    ) -> list[SectionKey] | None:
+        return list(dict.fromkeys(value)) if value is not None else None
+
 
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=160)
     password: Password | None = None
     role: UserRole | None = None
     is_active: bool | None = None
+    section_access: list[SectionKey] | None = None
 
     @field_validator("role")
     @classmethod
@@ -106,8 +120,15 @@ class UserUpdate(BaseModel):
             raise ValueError("Manager accounts cannot be promoted to deployment root")
         return value
 
+    @field_validator("section_access")
+    @classmethod
+    def unique_sections(
+        cls, value: list[SectionKey] | None
+    ) -> list[SectionKey] | None:
+        return list(dict.fromkeys(value)) if value is not None else None
 
-class UserRead(UserBrief):
+
+class UserRead(AuthenticatedUser):
     is_active: bool
     last_login_at: datetime | None
     created_at: datetime

@@ -24,7 +24,7 @@ import { OrderDeleteModal, OrderEditModal } from "./OrderManagement";
 import { Badge, EmptyState, Spinner } from "./ui";
 
 const paymentMethods = [
-  { method: "card", label: "انتقال به کارت", icon: CreditCard, tone: "blue" },
+  { method: "card", label: "کارت خوان", icon: CreditCard, tone: "blue" },
   { method: "cash", label: "نقدی", icon: Banknote, tone: "green" },
   { method: "online", label: "آنلاین", icon: Globe2, tone: "violet" },
   { method: "other", label: "سایر", icon: CircleEllipsis, tone: "amber" },

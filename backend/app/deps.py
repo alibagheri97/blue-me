@@ -12,6 +12,7 @@ from app.models import (
     AttendanceRecord,
     ChecklistPhase,
     CheckInChecklistItem,
+    SectionKey,
     StaffMember,
     User,
     UserRole,
@@ -85,6 +86,20 @@ def require_roles(*roles: UserRole) -> Callable:
     def dependency(user: User = Depends(get_current_user)) -> User:
         if user.role not in roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permission")
+        return user
+
+    return dependency
+
+
+def require_sections(*sections: SectionKey) -> Callable:
+    allowed = {section.value for section in sections}
+
+    def dependency(user: User = Depends(get_current_user)) -> User:
+        if not allowed.intersection(user.section_access):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Section access denied",
+            )
         return user
 
     return dependency

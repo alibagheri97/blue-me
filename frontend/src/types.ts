@@ -5,11 +5,24 @@ export type Role =
   | "sales_manager"
   | "kitchen_manager";
 
+export type SectionKey =
+  | "dashboard"
+  | "staff"
+  | "payroll"
+  | "inventory"
+  | "purchases"
+  | "menu"
+  | "pos"
+  | "kitchen"
+  | "reports"
+  | "audit";
+
 export interface User {
   id: number;
   username: string;
   full_name: string;
   role: Role;
+  section_access: SectionKey[];
   is_active?: boolean;
   last_login_at?: string | null;
   created_at?: string;

@@ -23,6 +23,7 @@ const errorTranslations: Record<string, string> = {
   "Invalid or expired session": "نشست شما منقضی یا نامعتبر است؛ دوباره وارد شوید.",
   "Account is unavailable": "این حساب کاربری در دسترس نیست.",
   "Insufficient permission": "شما اجازه انجام این عملیات را ندارید.",
+  "Section access denied": "دسترسی این بخش برای حساب شما فعال نیست.",
   "Invalid username or password": "نام کاربری یا رمز عبور نادرست است.",
   "Username already exists": "این نام کاربری قبلاً ثبت شده است.",
   "Inventory item not found": "کالای انبار پیدا نشد.",

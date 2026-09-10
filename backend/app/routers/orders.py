@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.audit import record_audit
 from app.db import get_db
-from app.deps import client_ip, require_roles
+from app.deps import client_ip, require_sections
 from app.models import (
     Customer,
     InventoryItem,
@@ -23,10 +23,10 @@ from app.models import (
     PaymentMethod,
     Recipe,
     RecipeIngredient,
+    SectionKey,
     StaffMember,
     StockMovement,
     User,
-    UserRole,
     utcnow,
 )
 from app.schemas import (
@@ -53,18 +53,10 @@ from app.services.takeaway import (
 )
 
 router = APIRouter(tags=["orders"])
-accounting_roles = require_roles(UserRole.ROOT, UserRole.ACCOUNTING_MANAGER)
-menu_management_roles = require_roles(
-    UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.SALES_MANAGER
-)
-menu_view_roles = require_roles(
-    UserRole.ROOT,
-    UserRole.ACCOUNTING_MANAGER,
-    UserRole.SALES_MANAGER,
-)
-order_status_roles = require_roles(
-    UserRole.ROOT, UserRole.ACCOUNTING_MANAGER, UserRole.KITCHEN_MANAGER
-)
+accounting_roles = require_sections(SectionKey.POS)
+menu_management_roles = require_sections(SectionKey.MENU)
+menu_view_roles = require_sections(SectionKey.MENU, SectionKey.POS)
+order_status_roles = require_sections(SectionKey.POS, SectionKey.KITCHEN)
 ORDER_STOCK_REFERENCE_TYPES = ["order", "order_takeaway", "order_edit"]
 
 
@@ -1170,12 +1162,14 @@ def update_order_status(
             status_code=409,
             detail=f"Cannot change an order from {order.status.value} to {payload.status.value}",
         )
-    if actor.role == UserRole.KITCHEN_MANAGER and payload.status in {
+    kitchen_only = SectionKey.POS.value not in actor.section_access
+    if kitchen_only and payload.status in {
         OrderStatus.CANCELLED,
         OrderStatus.COMPLETED,
     }:
         raise HTTPException(
-            status_code=403, detail="Kitchen managers can only mark preparing or ready"
+            status_code=403,
+            detail="Kitchen access can only mark orders as preparing or ready",
         )
 
     previous = order.status
@@ -1224,7 +1218,7 @@ def update_order_status(
     )
     db.commit()
     updated_order = get_order_or_404(db, order.id)
-    if actor.role == UserRole.KITCHEN_MANAGER:
+    if kitchen_only:
         return KitchenOrderRead.model_validate(updated_order)
     return OrderRead.model_validate(updated_order)
 

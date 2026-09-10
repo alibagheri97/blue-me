@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.audit import record_audit
 from app.core.config import settings
 from app.db import get_db
-from app.deps import client_ip, require_roles
+from app.deps import client_ip, require_roles, require_sections
 from app.models import (
     ApprovalStatus,
     Category,
@@ -19,6 +19,7 @@ from app.models import (
     MovementType,
     PriceChangeRequest,
     PriceType,
+    SectionKey,
     StockMovement,
     User,
     UserRole,
@@ -41,15 +42,12 @@ from app.services.business_time import business_date
 from app.services.units import unit_price
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
-inventory_roles = require_roles(UserRole.ROOT, UserRole.STORAGE_MANAGER)
-inventory_intake_roles = require_roles(
-    UserRole.ROOT, UserRole.STORAGE_MANAGER, UserRole.ACCOUNTING_MANAGER
+inventory_roles = require_sections(SectionKey.INVENTORY)
+inventory_intake_roles = require_sections(
+    SectionKey.INVENTORY, SectionKey.PURCHASES
 )
-inventory_view_roles = require_roles(
-    UserRole.ROOT,
-    UserRole.STORAGE_MANAGER,
-    UserRole.ACCOUNTING_MANAGER,
-    UserRole.SALES_MANAGER,
+inventory_view_roles = require_sections(
+    SectionKey.INVENTORY, SectionKey.PURCHASES, SectionKey.MENU
 )
 IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 

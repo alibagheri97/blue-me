@@ -5,13 +5,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import require_roles
-from app.models import AuditLog, User, UserRole
+from app.deps import require_sections
+from app.models import AuditLog, SectionKey, User
 from app.schemas import AuditPage
 from app.services.business_time import day_bounds
 
 router = APIRouter(prefix="/audit-logs", tags=["audit"])
-root_only = require_roles(UserRole.ROOT)
+root_only = require_sections(SectionKey.AUDIT)
 
 
 @router.get("", response_model=AuditPage)

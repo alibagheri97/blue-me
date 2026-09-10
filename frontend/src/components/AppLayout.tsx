@@ -23,25 +23,27 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { userHasSection } from "../lib/access";
 import { ApiError, api } from "../lib/api";
 import { dateTime, roleLabel, timeOnly } from "../lib/format";
-import type { AttendanceStatus, MyPerformance, Notification, Role } from "../types";
+import type { AttendanceStatus, MyPerformance, Notification, SectionKey } from "../types";
 import { CheckInGate, CheckInGateError, CheckInGateLoading } from "./CheckInGate";
 import { CheckoutChecklistModal } from "./CheckoutChecklistModal";
+import { PointSplit } from "./PointSplit";
 
-const nav = [
-  { to: "/", label: "نمای کلی", icon: LayoutDashboard, roles: ["root", "accounting_manager"] },
-  { to: "/users", label: "کاربران و دسترسی", icon: UsersRound, roles: ["root"] },
-  { to: "/staff", label: "پرسنل، حضور و غذا", icon: ContactRound, roles: ["root", "accounting_manager"] },
-  { to: "/payroll", label: "حقوق و امتیاز", icon: WalletCards, roles: ["root"] },
-  { to: "/inventory", label: "مدیریت انبار", icon: Boxes, roles: ["root", "storage_manager"] },
-  { to: "/purchases", label: "ورودی کالا", icon: PackagePlus, roles: ["root", "storage_manager", "accounting_manager"] },
-  { to: "/menu", label: "مدیریت منو", icon: UtensilsCrossed, roles: ["root", "accounting_manager", "sales_manager"] },
-  { to: "/pos", label: "سفارش و صندوق", icon: ShoppingCart, roles: ["root", "accounting_manager"] },
-  { to: "/kitchen", label: "آشپزخانه", icon: ChefHat, roles: ["root", "kitchen_manager"] },
-  { to: "/reports", label: "آمار و تحلیل", icon: BarChart3, roles: ["root", "accounting_manager"] },
-  { to: "/audit", label: "گزارش فعالیت‌ها", icon: ClipboardList, roles: ["root"] },
-] as const;
+const nav: Array<{ to: string; label: string; icon: typeof LayoutDashboard; section?: SectionKey; rootOnly?: boolean }> = [
+  { to: "/", label: "نمای کلی", icon: LayoutDashboard, section: "dashboard" },
+  { to: "/users", label: "کاربران و دسترسی", icon: UsersRound, rootOnly: true },
+  { to: "/staff", label: "پرسنل، حضور و غذا", icon: ContactRound, section: "staff" },
+  { to: "/payroll", label: "حقوق و امتیاز", icon: WalletCards, section: "payroll" },
+  { to: "/inventory", label: "مدیریت انبار", icon: Boxes, section: "inventory" },
+  { to: "/purchases", label: "ورودی کالا", icon: PackagePlus, section: "purchases" },
+  { to: "/menu", label: "مدیریت منو", icon: UtensilsCrossed, section: "menu" },
+  { to: "/pos", label: "سفارش و صندوق", icon: ShoppingCart, section: "pos" },
+  { to: "/kitchen", label: "آشپزخانه", icon: ChefHat, section: "kitchen" },
+  { to: "/reports", label: "آمار و تحلیل", icon: BarChart3, section: "reports" },
+  { to: "/audit", label: "گزارش فعالیت‌ها", icon: ClipboardList, section: "audit" },
+];
 
 function attendanceTime(value: string | undefined) {
   return value ? timeOnly(value) : "";
@@ -107,7 +109,7 @@ export function AppLayout() {
   if (attendance.data.checklist_required && !attendance.data.entry_allowed) {
     return <CheckInGate status={attendance.data} brand={brand} user={user} pending={attendanceMutation.isPending} error={attendanceError} onCheckIn={() => attendanceMutation.mutate({ action: "check-in" })} onComplete={(itemIds) => attendanceMutation.mutate({ action: "check-in-checklist", itemIds })} onLogout={logout} />;
   }
-  const visibleNav = nav.filter((item) => (item.roles as readonly Role[]).includes(user.role));
+  const visibleNav = nav.filter((item) => item.rootOnly ? user.role === "root" : Boolean(item.section && userHasSection(user, item.section)));
   const isCheckedIn = attendance.data?.is_checked_in === true;
   const showAttendance = Boolean(attendance.data?.staff_member) && (attendance.data?.eligible === true || isCheckedIn);
 
@@ -140,7 +142,7 @@ export function AppLayout() {
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)}><Menu size={22} /></button>
           <div className="topbar-context"><span>فضای مدیریت عملیات</span><strong>{brand.tagline}</strong></div>
           <div className="topbar-actions">
-            {performance.data?.staff_member_id && <span className={`performance-pill ${performance.data.total_points < 0 ? "negative" : ""}`} title="امتیاز عملکرد ماه جاری"><Sparkles size={15} /><strong>{performance.data.total_points.toLocaleString("fa-IR")}</strong><small>امتیاز من</small></span>}
+            {performance.data?.staff_member_id && <span className="performance-pill" title="امتیازهای مثبت و منفی ماه جاری"><Sparkles size={15} /><PointSplit positive={performance.data.positive_points} negative={performance.data.negative_points} compact /><small>امتیاز من</small></span>}
             {showAttendance && <button type="button" className={`attendance-button ${isCheckedIn ? "checked-in" : "checked-out"} ${attendanceError ? "has-error" : ""}`} disabled={attendanceMutation.isPending || attendance.isLoading} onClick={() => { setAttendanceError(""); if (isCheckedIn && attendance.data.checkout_checklist_required) setCheckoutOpen(true); else attendanceMutation.mutate({ action: isCheckedIn ? "check-out" : "check-in" }); }} title={attendanceError || (isCheckedIn ? "ثبت پایان حضور و خروج" : "ثبت شروع حضور و ورود")}><span className="attendance-icon">{isCheckedIn ? <LogOut size={17} /> : <LogIn size={17} />}</span><span><strong>{attendanceMutation.isPending ? "در حال ثبت…" : isCheckedIn ? "ثبت خروج" : "ثبت ورود"}</strong><small>{attendanceError || (isCheckedIn ? `ورود ${attendanceTime(attendance.data?.current_session?.checked_in_at)}` : `${attendanceDuration(attendance.data?.worked_minutes_today || 0)} امروز`)}</small></span><i /></button>}
             <div className="notification-wrap">
               <button className="notification-button" onClick={() => { setNotificationsOpen(!notificationsOpen); setProfileOpen(false); }} aria-label="اعلان‌ها"><Bell size={20} />{(notifications.data?.unread_count || 0) > 0 && <i>{notifications.data?.unread_count}</i>}</button>

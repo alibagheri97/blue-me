@@ -8,16 +8,16 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.audit import record_audit
 from app.db import get_db
-from app.deps import client_ip, get_current_user, require_roles
+from app.deps import client_ip, get_current_user, require_sections
 from app.models import (
     Notification,
     PayrollStatement,
     PayrollStatus,
     PointSource,
+    SectionKey,
     StaffMember,
     StaffPointEntry,
     User,
-    UserRole,
     utcnow,
 )
 from app.schemas import (
@@ -42,7 +42,7 @@ from app.services.payroll import (
 
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
-root_only = require_roles(UserRole.ROOT)
+root_only = require_sections(SectionKey.PAYROLL)
 
 
 def member_or_404(db: Session, staff_member_id: int) -> StaffMember:

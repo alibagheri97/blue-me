@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
-from app.deps import require_roles
+from app.deps import require_sections
 from app.models import (
     ApprovalStatus,
     DailyNeed,
@@ -21,9 +21,9 @@ from app.models import (
     PriceChangeRequest,
     PurchaseReceipt,
     PurchaseStatus,
+    SectionKey,
     StockMovement,
     User,
-    UserRole,
 )
 from app.schemas import DashboardSummary
 from app.services.business_time import (
@@ -36,7 +36,8 @@ from app.services.business_time import (
 from app.services.system_settings import get_system_settings
 
 router = APIRouter(tags=["reports"])
-financial_roles = require_roles(UserRole.ROOT, UserRole.ACCOUNTING_MANAGER)
+dashboard_access = require_sections(SectionKey.DASHBOARD)
+reports_access = require_sections(SectionKey.REPORTS)
 
 
 def empty_payment_breakdown() -> dict[str, dict[str, Decimal | int | str]]:
@@ -88,7 +89,7 @@ def successful_orders_query(start: datetime, end: datetime):
 
 @router.get("/dashboard", response_model=DashboardSummary)
 def dashboard(
-    actor: User = Depends(financial_roles), db: Session = Depends(get_db)
+    actor: User = Depends(dashboard_access), db: Session = Depends(get_db)
 ) -> DashboardSummary:
     current_date = business_today()
     today_start, today_end = day_bounds(current_date)
@@ -195,7 +196,7 @@ def dashboard(
 @router.get("/reports/overview")
 def reports_overview(
     days: int = Query(default=30, ge=7, le=365),
-    _: User = Depends(financial_roles),
+    _: User = Depends(reports_access),
     db: Session = Depends(get_db),
 ) -> dict:
     end_date = business_today()

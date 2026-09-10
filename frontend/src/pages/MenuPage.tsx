@@ -19,6 +19,7 @@ import { RecipeEditor } from "../components/RecipeEditor";
 import { TakeawaySupplyManager } from "../components/TakeawaySupplyManager";
 import { Badge, Button, EmptyState, Modal, Spinner } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
+import { userHasSection } from "../lib/access";
 import { ApiError, api } from "../lib/api";
 import { money, quantity } from "../lib/format";
 import type { InventoryItem, MenuCategory, MenuItem, Recipe } from "../types";
@@ -36,7 +37,7 @@ export default function MenuPage() {
   const [error, setError] = useState("");
   const [recipeError, setRecipeError] = useState("");
   const [recipeEditor, setRecipeEditor] = useState<{ menuItemId: number; recipe: Recipe | null } | null>(null);
-  const canManageMenu = user?.role === "root" || user?.role === "accounting_manager" || user?.role === "sales_manager";
+  const canManageMenu = Boolean(user && userHasSection(user, "menu"));
   const canManageRecipes = user?.role === "root" || user?.role === "kitchen_manager";
   const canManageTakeaway = user?.role === "root" || user?.role === "accounting_manager";
 
