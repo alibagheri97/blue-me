@@ -126,6 +126,7 @@ def serialize_record(
     )
     return AttendanceRecordRead(
         id=record.id,
+        is_temporary=record.is_temporary,
         staff_member_id=record.staff_member_id,
         checked_in_by_id=record.checked_in_by_id,
         checked_out_by_id=record.checked_out_by_id,
@@ -153,6 +154,8 @@ def minutes_in_period(
 ) -> int:
     total_seconds = 0.0
     for record in records:
+        if record.is_temporary:
+            continue
         overlap_start = max(record.checked_in_at, start)
         overlap_end = min(record.checked_out_at or now, end)
         if overlap_end > overlap_start:
@@ -215,6 +218,9 @@ def notify_roots(
         ),
     }
     kind, title, message = event_copy[event]
+    if record.is_temporary:
+        title = "ورود موقت پرسنل" if event == "check_in" else "خروج از حضور موقت"
+        message = f"{member.name} · {title}؛ بدون چک‌لیست، امتیاز و ساعت کار مؤثر."
     for root in roots:
         db.add(
             Notification(
@@ -285,6 +291,7 @@ def attendance_status(db: Session, actor: User) -> AttendanceStatusRead:
     entry_completed = not checklist_items or (
         current is not None and current.entry_checklist_completed_at is not None
     )
+    temporary = current is not None and current.is_temporary
     return AttendanceStatusRead(
         eligible=member.is_active,
         is_checked_in=current is not None,
@@ -298,9 +305,9 @@ def attendance_status(db: Session, actor: User) -> AttendanceStatusRead:
         checklist_items=[
             CheckInChecklistItemRead.model_validate(item) for item in checklist_items
         ],
-        entry_allowed=entry_completed,
+        entry_allowed=entry_completed or temporary,
         entry_checklist_completed=entry_completed,
-        checkout_checklist_required=current is not None and bool(checkout_items),
+        checkout_checklist_required=current is not None and not temporary and bool(checkout_items),
         checkout_checklist_items=[
             CheckInChecklistItemRead.model_validate(item) for item in checkout_items
         ],
@@ -495,7 +502,7 @@ def my_attendance_status(
 )
 def check_in(
     request: Request,
-    _: CheckInRequest = Body(default_factory=CheckInRequest),
+    payload: CheckInRequest = Body(default_factory=CheckInRequest),
     actor: User = Depends(get_authenticated_user),
     db: Session = Depends(get_db),
 ) -> AttendanceStatusRead:
@@ -504,16 +511,17 @@ def check_in(
         raise HTTPException(status_code=409, detail="Your staff profile is inactive")
     if open_session(db, member.id) is not None:
         raise HTTPException(status_code=409, detail="You are already checked in")
-    checklist_items = active_checklist_items(
+    checklist_items = [] if payload.is_temporary else active_checklist_items(
         db, actor.id, phase=ChecklistPhase.ENTRY, lock=True
     )
     now = utcnow()
     record = AttendanceRecord(
         staff_member_id=member.id,
+        is_temporary=payload.is_temporary,
         checked_in_by_id=actor.id,
         checked_in_at=now,
         check_in_ip=client_ip(request),
-        entry_checklist_completed_at=None if checklist_items else now,
+        entry_checklist_completed_at=None if checklist_items or payload.is_temporary else now,
     )
     db.add(record)
     db.flush()
@@ -521,7 +529,7 @@ def check_in(
     award_points(
         db,
         staff_member_id=member.id,
-        points=policy.check_in_points,
+        points=0 if record.is_temporary else policy.check_in_points,
         source=PointSource.CHECK_IN,
         reason="ثبت منظم ورود به شیفت",
         created_by_id=actor.id,
@@ -536,12 +544,13 @@ def check_in(
         category="attendance",
         entity_type="attendance_record",
         entity_id=record.id,
-        summary=f"ورود {member.name} ثبت شد",
+        summary=f"ورود {'موقت ' if record.is_temporary else ''}{member.name} ثبت شد",
         details={
             "staff_member_id": member.id,
             "checked_in_at": now.isoformat(),
             "entry_checklist_required": bool(checklist_items),
-            "awarded_points": policy.check_in_points,
+            "awarded_points": 0 if record.is_temporary else policy.check_in_points,
+            "is_temporary": record.is_temporary,
         },
         ip_address=client_ip(request),
     )
@@ -560,6 +569,8 @@ def complete_check_in_checklist(
     record = open_session(db, member.id)
     if record is None:
         raise HTTPException(status_code=409, detail="Check in before completing the checklist")
+    if record.is_temporary:
+        raise HTTPException(status_code=409, detail="Temporary attendance has no checklist or points")
     if record.entry_checklist_completed_at is not None:
         raise HTTPException(status_code=409, detail="Entry checklist is already completed")
     checklist_items = active_checklist_items(
@@ -633,7 +644,7 @@ def check_out(
     record = open_session(db, member.id)
     if record is None:
         raise HTTPException(status_code=409, detail="You are not checked in")
-    checklist_items = active_checklist_items(
+    checklist_items = [] if record.is_temporary else active_checklist_items(
         db, actor.id, phase=ChecklistPhase.EXIT, lock=True
     )
     required_ids = {item.id for item in checklist_items}
@@ -671,7 +682,7 @@ def check_out(
     award_points(
         db,
         staff_member_id=member.id,
-        points=policy.check_out_points,
+        points=0 if record.is_temporary else policy.check_out_points,
         source=PointSource.CHECK_OUT,
         reason="ثبت منظم خروج از شیفت",
         created_by_id=actor.id,
@@ -689,7 +700,7 @@ def check_out(
             attendance_record_id=record.id,
             reference_key=f"attendance:{record.id}:exit_checklist",
         )
-    completed_hours = duration_minutes // 60
+    completed_hours = 0 if record.is_temporary else duration_minutes // 60
     award_points(
         db,
         staff_member_id=member.id,
@@ -708,15 +719,16 @@ def check_out(
         category="attendance",
         entity_type="attendance_record",
         entity_id=record.id,
-        summary=f"خروج {member.name} ثبت شد",
+        summary=f"خروج {'موقت ' if record.is_temporary else ''}{member.name} ثبت شد",
         details={
             "staff_member_id": member.id,
             "checked_in_at": record.checked_in_at.isoformat(),
             "checked_out_at": now.isoformat(),
             "duration_minutes": duration_minutes,
+            "is_temporary": record.is_temporary,
             "checkout_checklist_items": [item.title for item in checklist_items],
             "awarded_points": {
-                "check_out": policy.check_out_points,
+                "check_out": 0 if record.is_temporary else policy.check_out_points,
                 "exit_checklist": (
                     policy.exit_checklist_points if checklist_items else 0
                 ),

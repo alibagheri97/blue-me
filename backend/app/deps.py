@@ -54,7 +54,7 @@ def get_current_user(
     if required_item is None:
         return user
     open_attendance = db.execute(
-        select(AttendanceRecord.id, AttendanceRecord.entry_checklist_completed_at)
+        select(AttendanceRecord.id, AttendanceRecord.entry_checklist_completed_at, AttendanceRecord.is_temporary)
         .join(StaffMember, StaffMember.id == AttendanceRecord.staff_member_id)
         .where(
             StaffMember.user_id == user.id,
@@ -71,7 +71,7 @@ def get_current_user(
                 "message": "Complete your required check-in checklist first",
             },
         )
-    if open_attendance.entry_checklist_completed_at is None:
+    if not open_attendance.is_temporary and open_attendance.entry_checklist_completed_at is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

@@ -626,6 +626,14 @@ def archive_item(
 ) -> None:
     item = get_item_or_404(db, item_id, lock=True)
     item.is_active = False
+    for pending in db.scalars(select(PriceChangeRequest).where(
+        PriceChangeRequest.item_id == item.id,
+        PriceChangeRequest.status == ApprovalStatus.PENDING,
+    )):
+        pending.status = ApprovalStatus.CANCELLED
+        pending.decided_by_id = actor.id
+        pending.decided_at = datetime.now(UTC).replace(tzinfo=None)
+        pending.decision_note = "لغو درخواست قیمت پس از حذف کالا از انبار فعال"
     sync_auto_purchase_need(db, item=item, actor=actor)
     record_audit(
         db,
@@ -635,6 +643,7 @@ def archive_item(
         entity_type="inventory_item",
         entity_id=item.id,
         summary=f"Archived inventory item {item.name}",
+        details={"sku": item.sku, "quantity_preserved": str(item.current_quantity), "recoverable": True},
         ip_address=client_ip(request),
     )
     db.commit()

@@ -537,7 +537,7 @@ class ChecklistCompletionRequest(BaseModel):
 
 
 class CheckInRequest(BaseModel):
-    """Kept as an empty request model for backwards-compatible clients."""
+    is_temporary: bool = False
 
 
 class CheckOutRequest(ChecklistCompletionRequest):
@@ -553,6 +553,7 @@ class AttendanceChecklistCompletionRead(ORMModel):
 
 class AttendanceRecordRead(BaseModel):
     id: int
+    is_temporary: bool
     staff_member_id: int
     checked_in_by_id: int
     checked_out_by_id: int | None
@@ -880,6 +881,7 @@ class OrderCreate(BaseModel):
     customer_id: int | None = None
     customer: CustomerCreate | None = None
     staff_member_id: int | None = None
+    is_system_waste: bool = False
     discount: PositiveMoney = Decimal("0")
     payment_method: PaymentMethod = PaymentMethod.CARD
     order_type: OrderType = OrderType.DINE_IN
@@ -889,6 +891,11 @@ class OrderCreate(BaseModel):
 
     @model_validator(mode="after")
     def one_account_target(self):
+        if self.is_system_waste:
+            if self.staff_member_id is not None or self.customer_id is not None or self.customer is not None:
+                raise ValueError("System waste cannot be assigned to a customer or staff member")
+            if len((self.notes or "").strip()) < 3:
+                raise ValueError("A reason is required for system waste")
         if self.staff_member_id is not None and (
             self.customer_id is not None or self.customer is not None
         ):
@@ -944,6 +951,7 @@ class OrderRead(ORMModel):
     staff_member_id: int | None
     staff_name: str | None
     is_staff_meal: bool
+    is_system_waste: bool
     order_type: OrderType
     takeaway_package_count: int
     takeaway_cost: Decimal
@@ -976,6 +984,7 @@ class KitchenOrderRead(ORMModel):
     staff_member_id: int | None
     staff_name: str | None
     is_staff_meal: bool
+    is_system_waste: bool
     order_type: OrderType
     takeaway_package_count: int
     notes: str | None

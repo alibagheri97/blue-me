@@ -50,6 +50,10 @@ def award_points(
 ) -> StaffPointEntry | None:
     if points == 0:
         return None
+    if attendance_record_id is not None:
+        attendance = db.get(AttendanceRecord, attendance_record_id)
+        if attendance is not None and attendance.is_temporary:
+            return None
     if reference_key:
         existing = db.scalar(
             select(StaffPointEntry).where(
@@ -79,6 +83,8 @@ def period_datetimes(period_start: date, period_end: date) -> tuple[datetime, da
 
 
 def period_profit(db: Session, period_start: date, period_end: date) -> Decimal:
+    # System-waste orders have zero revenue; their snapshot costs reduce the profit
+    # available for profit sharing. The report-only staff toggle never alters payroll.
     start, end = period_datetimes(period_start, period_end)
     orders = list(
         db.scalars(
@@ -118,6 +124,7 @@ def attendance_metrics(
         db.scalars(
             select(AttendanceRecord).where(
                 AttendanceRecord.staff_member_id == staff_member_id,
+                AttendanceRecord.is_temporary.is_(False),
                 AttendanceRecord.checked_in_at <= end,
                 or_(
                     AttendanceRecord.checked_out_at.is_(None),

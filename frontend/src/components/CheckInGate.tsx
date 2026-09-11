@@ -10,11 +10,12 @@ interface CheckInGateProps {
   pending: boolean;
   error: string;
   onCheckIn: () => void;
+  onTemporaryCheckIn: () => void;
   onComplete: (itemIds: number[]) => void;
   onLogout: () => void;
 }
 
-export function CheckInGate({ status, brand, user, pending, error, onCheckIn, onComplete, onLogout }: CheckInGateProps) {
+export function CheckInGate({ status, brand, user, pending, error, onCheckIn, onTemporaryCheckIn, onComplete, onLogout }: CheckInGateProps) {
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
   const checkedIn = status.is_checked_in;
   const items = status.checklist_items;
@@ -72,6 +73,7 @@ export function CheckInGate({ status, brand, user, pending, error, onCheckIn, on
         </> : <div className="gate-check-in-ready"><LogIn /><div><strong>ثبت ورود یک‌مرحله‌ای</strong><p>پس از تأیید، ساعت ورود ذخیره می‌شود و چک‌لیست شروع کار باز خواهد شد.</p></div><span>۱</span></div>}
 
         {error && <div className="form-error gate-error">{error}</div>}
+        {!checkedIn && <div className="temporary-entry-option"><div><strong>فقط برای انجام یک کار کوتاه برگشته‌اید؟</strong><small>ورود و خروج ثبت و به مدیرکل اعلام می‌شود؛ بدون چک‌لیست، امتیاز و ساعت کار مؤثر.</small></div><Button variant="secondary" disabled={pending} onClick={onTemporaryCheckIn}><Clock3 size={18} /> ورود موقت بدون چک‌لیست</Button></div>}
         <div className="gate-action-row">
           <div><Clock3 /><span><strong>{checkedIn ? "تأیید قابل پیگیری" : "ثبت دقیق زمان ورود"}</strong><small>{checkedIn ? "موارد انجام‌شده همراه همین شیفت ذخیره می‌شوند." : "ساعت حضور و امتیاز ورود به‌صورت خودکار ثبت می‌شود."}</small></span></div>
           <Button className="gate-submit" disabled={(checkedIn && !allChecked) || pending} onClick={() => checkedIn ? onComplete(selectedIds) : onCheckIn()}>

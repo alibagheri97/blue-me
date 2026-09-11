@@ -1,9 +1,9 @@
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
@@ -54,6 +54,8 @@ def empty_payment_breakdown() -> dict[str, dict[str, Decimal | int | str]]:
 def add_payment(
     breakdown: dict[str, dict[str, Decimal | int | str]], order: Order
 ) -> None:
+    if order.is_staff_meal or order.is_system_waste:
+        return
     method = order.payment_method.value
     breakdown[method]["amount"] += order.total
     breakdown[method]["orders"] += 1
@@ -78,13 +80,18 @@ def finalize_payment_breakdown(
     ]
 
 
-def successful_orders_query(start: datetime, end: datetime):
-    return select(Order).where(
+def successful_orders_query(start: datetime, end: datetime, *, include_staff_meals: bool = False):
+    query = select(Order).where(
         Order.created_at.between(start, end),
         Order.status != OrderStatus.CANCELLED,
-        Order.is_staff_meal.is_(False),
+        Order.is_system_waste.is_(False),
         Order.is_deleted.is_(False),
     )
+    return query if include_staff_meals else query.where(Order.is_staff_meal.is_(False))
+
+
+def order_cost(order: Order) -> Decimal:
+    return sum((line.line_cost for line in order.items), Decimal("0")) + Decimal(order.takeaway_cost)
 
 
 @router.get("/dashboard", response_model=DashboardSummary)
@@ -111,6 +118,7 @@ def dashboard(
             .options(selectinload(Order.items))
             .where(
                 Order.is_staff_meal.is_(False),
+                Order.is_system_waste.is_(False),
                 Order.is_deleted.is_(False),
             )
             .order_by(Order.created_at.desc())
@@ -195,26 +203,53 @@ def dashboard(
 
 @router.get("/reports/overview")
 def reports_overview(
-    days: int = Query(default=30, ge=7, le=365),
+    days: int = Query(default=30, ge=1, le=365),
+    start_date: date | None = None,
+    end_date: date | None = None,
+    include_staff_meals: bool = False,
+    search: str | None = Query(default=None, max_length=100),
+    order_status: OrderStatus | None = Query(default=None, alias="status"),
     _: User = Depends(reports_access),
     db: Session = Depends(get_db),
 ) -> dict:
-    end_date = business_today()
-    start_date = end_date - timedelta(days=days - 1)
+    if (start_date is None) != (end_date is None):
+        raise HTTPException(status_code=422, detail="Select both start and end dates")
+    end_date = end_date or business_today()
+    start_date = start_date or end_date - timedelta(days=days - 1)
+    days = (end_date - start_date).days + 1
+    if not 1 <= days <= 365:
+        raise HTTPException(status_code=422, detail="Report range must be between 1 and 365 days")
     previous_start = start_date - timedelta(days=days)
     start_dt, _ = day_bounds(start_date)
     _, end_dt = day_bounds(end_date)
     previous_start_dt, _ = day_bounds(previous_start)
     previous_end_dt = start_dt - timedelta(microseconds=1)
 
+    def filtered(query):
+        if search:
+            term = f"%{search.strip()}%"
+            query = query.where(or_(Order.order_number.ilike(term), Order.customer_name.ilike(term)))
+        if order_status:
+            query = query.where(Order.status == order_status)
+        return query
+
     orders = list(
         db.scalars(
-            successful_orders_query(start_dt, end_dt).options(selectinload(Order.items))
+            filtered(successful_orders_query(start_dt, end_dt, include_staff_meals=include_staff_meals)).options(selectinload(Order.items))
         ).unique()
     )
     previous_orders = list(
-        db.scalars(successful_orders_query(previous_start_dt, previous_end_dt))
+        db.scalars(filtered(successful_orders_query(previous_start_dt, previous_end_dt, include_staff_meals=include_staff_meals)))
     )
+    waste_orders = list(db.scalars(filtered(select(Order).where(
+        Order.created_at.between(start_dt, end_dt),
+        Order.is_system_waste.is_(True),
+        Order.is_deleted.is_(False),
+        Order.status != OrderStatus.CANCELLED,
+    )).options(selectinload(Order.items))).unique())
+    staff_orders = [order for order in orders if order.is_staff_meal]
+    staff_cost = sum((order_cost(order) for order in staff_orders), Decimal("0"))
+    waste_cost = sum((order_cost(order) for order in waste_orders), Decimal("0"))
     revenue = sum((order.total for order in orders), Decimal("0"))
     previous_revenue = sum((order.total for order in previous_orders), Decimal("0"))
     revenue_growth = (
@@ -223,15 +258,8 @@ def reports_overview(
         else (Decimal("100") if revenue > 0 else Decimal("0"))
     )
 
-    menu_ids = {line.menu_item_id for order in orders for line in order.items}
-    cogs = sum(
-        (
-            sum((line.line_cost for line in order.items), Decimal("0"))
-            + Decimal(order.takeaway_cost)
-            for order in orders
-        ),
-        Decimal("0"),
-    )
+    menu_ids = {line.menu_item_id for order in [*orders, *waste_orders] for line in order.items}
+    cogs = sum((order_cost(order) for order in orders), Decimal("0")) + waste_cost
     purchase_start_dt, _ = local_day_bounds(start_date)
     _, purchase_end_dt = local_day_bounds(end_date)
     purchase_spend = db.scalar(
@@ -245,6 +273,10 @@ def reports_overview(
             "date": (start_date + timedelta(days=index)).isoformat(),
             "revenue": Decimal("0"),
             "orders": 0,
+            "staff_orders": 0,
+            "waste_orders": 0,
+            "estimated_cost": Decimal("0"),
+            "waste_cost": Decimal("0"),
             "payment_breakdown": empty_payment_breakdown(),
         }
         for index in range(days)
@@ -252,10 +284,10 @@ def reports_overview(
     payment_breakdown = empty_payment_breakdown()
     product_stats: dict[int, dict] = {}
     hourly = {
-        hour: {"hour": hour, "revenue": Decimal("0"), "orders": 0} for hour in range(24)
+        hour: {"hour": hour, "revenue": Decimal("0"), "orders": 0, "staff_orders": 0, "waste_orders": 0, "estimated_cost": Decimal("0")} for hour in range(24)
     }
     category_stats: dict[str, dict] = defaultdict(
-        lambda: {"revenue": Decimal("0"), "quantity": 0}
+        lambda: {"revenue": Decimal("0"), "quantity": 0, "waste_quantity": 0, "estimated_cost": Decimal("0")}
     )
     customer_counts: Counter[int] = Counter()
 
@@ -263,17 +295,26 @@ def reports_overview(
         item.id: item
         for item in db.scalars(select(MenuItem).where(MenuItem.id.in_(menu_ids)))
     }
-    for order in orders:
+    for order in [*orders, *waste_orders]:
         local_created_at = business_datetime(order.created_at)
         key = business_date(order.created_at).isoformat()
         daily[key]["revenue"] += order.total
-        daily[key]["orders"] += 1
+        daily[key]["orders"] += int(not order.is_system_waste)
+        daily[key]["staff_orders"] += int(order.is_staff_meal)
+        daily[key]["waste_orders"] += int(order.is_system_waste)
+        daily[key]["estimated_cost"] += order_cost(order)
+        if order.is_system_waste:
+            daily[key]["waste_cost"] += order_cost(order)
         add_payment(payment_breakdown, order)
         add_payment(daily[key]["payment_breakdown"], order)
         hourly[local_created_at.hour]["revenue"] += order.total
-        hourly[local_created_at.hour]["orders"] += 1
+        hourly[local_created_at.hour]["orders"] += int(not order.is_system_waste)
+        hourly[local_created_at.hour]["staff_orders"] += int(order.is_staff_meal)
+        hourly[local_created_at.hour]["waste_orders"] += int(order.is_system_waste)
+        hourly[local_created_at.hour]["estimated_cost"] += order_cost(order)
         if order.customer_id:
             customer_counts[order.customer_id] += 1
+        item_count = sum(line.quantity for line in order.items)
         for line in order.items:
             allocated_revenue = (
                 line.line_total * order.total / order.subtotal
@@ -286,17 +327,26 @@ def reports_overview(
                     "id": line.menu_item_id,
                     "name": line.name,
                     "quantity": 0,
+                    "staff_quantity": 0,
+                    "waste_quantity": 0,
+                    "waste_cost": Decimal("0"),
                     "revenue": Decimal("0"),
                     "estimated_cost": Decimal("0"),
                 },
             )
-            stat["quantity"] += line.quantity
+            stat["quantity"] += 0 if order.is_system_waste else line.quantity
+            stat["staff_quantity"] += line.quantity if order.is_staff_meal else 0
+            stat["waste_quantity"] += line.quantity if order.is_system_waste else 0
             stat["revenue"] += allocated_revenue
-            stat["estimated_cost"] += line.line_cost
+            allocated_cost = line.line_cost + Decimal(order.takeaway_cost) * line.quantity / item_count
+            stat["waste_cost"] += allocated_cost if order.is_system_waste else Decimal("0")
+            stat["estimated_cost"] += allocated_cost
             menu = menu_lookup.get(line.menu_item_id)
             category = menu.category if menu else "Unknown"
             category_stats[category]["revenue"] += allocated_revenue
-            category_stats[category]["quantity"] += line.quantity
+            category_stats[category]["quantity"] += 0 if order.is_system_waste else line.quantity
+            category_stats[category]["waste_quantity"] += line.quantity if order.is_system_waste else 0
+            category_stats[category]["estimated_cost"] += allocated_cost
 
     for stat in product_stats.values():
         stat["gross_profit"] = stat["revenue"] - stat["estimated_cost"]
@@ -316,11 +366,10 @@ def reports_overview(
     low_stock = [
         item for item in inventory_items if item.current_quantity <= item.reorder_level
     ]
-    since_30, _ = day_bounds(end_date - timedelta(days=29))
     moving_ids = set(
         db.scalars(
             select(StockMovement.item_id).where(
-                StockMovement.created_at >= since_30,
+                StockMovement.created_at.between(start_dt, end_dt),
                 StockMovement.quantity < 0,
             )
         )
@@ -337,6 +386,7 @@ def reports_overview(
     daily_sales = [
         {
             **summary,
+            "gross_profit": summary["revenue"] - summary["estimated_cost"],
             "payment_breakdown": finalize_payment_breakdown(
                 summary["payment_breakdown"], Decimal(summary["revenue"])
             ),
@@ -345,11 +395,17 @@ def reports_overview(
     ]
 
     return {
-        "period": {"days": days, "start": start_date, "end": end_date},
+        "period": {"days": days, "start": start_date, "end": end_date, "include_staff_meals": include_staff_meals},
         "kpis": {
             "revenue": revenue,
             "revenue_growth_percent": revenue_growth.quantize(Decimal("0.01")),
             "orders": len(orders),
+            "staff_orders": len(staff_orders),
+            "staff_cost": staff_cost,
+            "staff_menu_value": sum((order.subtotal for order in staff_orders), Decimal("0")),
+            "waste_orders": len(waste_orders),
+            "waste_cost": waste_cost,
+            "waste_menu_value": sum((order.subtotal for order in waste_orders), Decimal("0")),
             "average_order_value": revenue / len(orders) if orders else Decimal("0"),
             "estimated_cogs": cogs.quantize(Decimal("0.01")),
             "purchase_spend": Decimal(purchase_spend).quantize(Decimal("0.01")),
@@ -375,9 +431,9 @@ def reports_overview(
         "hourly_demand": list(hourly.values()),
         "product_performance": sorted(
             product_stats.values(), key=lambda item: item["revenue"], reverse=True
-        )[:20],
+        ),
         "category_performance": [
-            {"category": name, **values}
+            {"category": name, **values, "gross_profit": values["revenue"] - values["estimated_cost"]}
             for name, values in sorted(
                 category_stats.items(),
                 key=lambda item: item[1]["revenue"],

@@ -12,6 +12,7 @@ import {
   LogOut,
   Menu,
   PackagePlus,
+  ReceiptText,
   Sparkles,
   ShoppingCart,
   UtensilsCrossed,
@@ -38,6 +39,7 @@ const nav: Array<{ to: string; label: string; icon: typeof LayoutDashboard; sect
   { to: "/payroll", label: "حقوق و امتیاز", icon: WalletCards, section: "payroll" },
   { to: "/inventory", label: "مدیریت انبار", icon: Boxes, section: "inventory" },
   { to: "/purchases", label: "ورودی کالا", icon: PackagePlus, section: "purchases" },
+  { to: "/expenses", label: "هزینه‌ها", icon: ReceiptText, section: "expenses" },
   { to: "/menu", label: "مدیریت منو", icon: UtensilsCrossed, section: "menu" },
   { to: "/pos", label: "سفارش و صندوق", icon: ShoppingCart, section: "pos" },
   { to: "/kitchen", label: "آشپزخانه", icon: ChefHat, section: "kitchen" },
@@ -92,8 +94,9 @@ export function AppLayout() {
     onSuccess: () => client.invalidateQueries({ queryKey: ["notifications"] }),
   });
   const attendanceMutation = useMutation({
-    mutationFn: ({ action, itemIds = [] }: { action: "check-in" | "check-in-checklist" | "check-out"; itemIds?: number[] }) => api<AttendanceStatus>(`/attendance/${action}`, { method: "POST", body: action === "check-in" ? {} : { checklist_item_ids: itemIds } }),
-    onSuccess: (data) => {
+    mutationFn: ({ action, itemIds = [], temporary = false }: { action: "check-in" | "check-in-checklist" | "check-out"; itemIds?: number[]; temporary?: boolean; logoutAfter?: boolean }) => api<AttendanceStatus>(`/attendance/${action}`, { method: "POST", body: action === "check-in" ? { is_temporary: temporary } : { checklist_item_ids: itemIds } }),
+    onSuccess: (data, variables) => {
+      if (variables.logoutAfter) logout();
       setAttendanceError("");
       setCheckoutOpen(false);
       client.setQueryData(["attendance", "me"], data);
@@ -107,10 +110,12 @@ export function AppLayout() {
   if (attendance.isLoading) return <CheckInGateLoading brand={brand} />;
   if (attendance.isError || !attendance.data) return <CheckInGateError brand={brand} retry={() => attendance.refetch()} logout={logout} />;
   if (attendance.data.checklist_required && !attendance.data.entry_allowed) {
-    return <CheckInGate status={attendance.data} brand={brand} user={user} pending={attendanceMutation.isPending} error={attendanceError} onCheckIn={() => attendanceMutation.mutate({ action: "check-in" })} onComplete={(itemIds) => attendanceMutation.mutate({ action: "check-in-checklist", itemIds })} onLogout={logout} />;
+    return <CheckInGate status={attendance.data} brand={brand} user={user} pending={attendanceMutation.isPending} error={attendanceError} onCheckIn={() => attendanceMutation.mutate({ action: "check-in" })} onTemporaryCheckIn={() => attendanceMutation.mutate({ action: "check-in", temporary: true })} onComplete={(itemIds) => attendanceMutation.mutate({ action: "check-in-checklist", itemIds })} onLogout={logout} />;
   }
   const visibleNav = nav.filter((item) => item.rootOnly ? user.role === "root" : Boolean(item.section && userHasSection(user, item.section)));
   const isCheckedIn = attendance.data?.is_checked_in === true;
+  const isTemporary = attendance.data.current_session?.is_temporary === true;
+  const exitAccount = () => isTemporary ? attendanceMutation.mutate({ action: "check-out", logoutAfter: true }) : logout();
   const showAttendance = Boolean(attendance.data?.staff_member) && (attendance.data?.eligible === true || isCheckedIn);
 
   return (
@@ -143,7 +148,8 @@ export function AppLayout() {
           <div className="topbar-context"><span>فضای مدیریت عملیات</span><strong>{brand.tagline}</strong></div>
           <div className="topbar-actions">
             {performance.data?.staff_member_id && <span className="performance-pill" title="امتیازهای مثبت و منفی ماه جاری"><Sparkles size={15} /><PointSplit positive={performance.data.positive_points} negative={performance.data.negative_points} compact /><small>امتیاز من</small></span>}
-            {showAttendance && <button type="button" className={`attendance-button ${isCheckedIn ? "checked-in" : "checked-out"} ${attendanceError ? "has-error" : ""}`} disabled={attendanceMutation.isPending || attendance.isLoading} onClick={() => { setAttendanceError(""); if (isCheckedIn && attendance.data.checkout_checklist_required) setCheckoutOpen(true); else attendanceMutation.mutate({ action: isCheckedIn ? "check-out" : "check-in" }); }} title={attendanceError || (isCheckedIn ? "ثبت پایان حضور و خروج" : "ثبت شروع حضور و ورود")}><span className="attendance-icon">{isCheckedIn ? <LogOut size={17} /> : <LogIn size={17} />}</span><span><strong>{attendanceMutation.isPending ? "در حال ثبت…" : isCheckedIn ? "ثبت خروج" : "ثبت ورود"}</strong><small>{attendanceError || (isCheckedIn ? `ورود ${attendanceTime(attendance.data?.current_session?.checked_in_at)}` : `${attendanceDuration(attendance.data?.worked_minutes_today || 0)} امروز`)}</small></span><i /></button>}
+            {showAttendance && <button type="button" className={`attendance-button ${isCheckedIn ? "checked-in" : "checked-out"} ${attendanceError ? "has-error" : ""}`} disabled={attendanceMutation.isPending || attendance.isLoading} onClick={() => { setAttendanceError(""); if (isCheckedIn && attendance.data.checkout_checklist_required) setCheckoutOpen(true); else attendanceMutation.mutate({ action: isCheckedIn ? "check-out" : "check-in", logoutAfter: isTemporary }); }} title={attendanceError || (isCheckedIn ? "ثبت پایان حضور و خروج" : "ثبت شروع حضور و ورود")}><span className="attendance-icon">{isCheckedIn ? <LogOut size={17} /> : <LogIn size={17} />}</span><span><strong>{attendanceMutation.isPending ? "در حال ثبت…" : isCheckedIn ? isTemporary ? "پایان ورود موقت" : "ثبت خروج" : "ثبت ورود"}</strong><small>{attendanceError || (isCheckedIn ? `ورود ${attendanceTime(attendance.data?.current_session?.checked_in_at)}` : `${attendanceDuration(attendance.data?.worked_minutes_today || 0)} امروز`)}</small></span><i /></button>}
+            {showAttendance && !isCheckedIn && <button className="temporary-entry-button" disabled={attendanceMutation.isPending} onClick={() => attendanceMutation.mutate({ action: "check-in", temporary: true })}>ورود موقت بدون چک‌لیست</button>}
             <div className="notification-wrap">
               <button className="notification-button" onClick={() => { setNotificationsOpen(!notificationsOpen); setProfileOpen(false); }} aria-label="اعلان‌ها"><Bell size={20} />{(notifications.data?.unread_count || 0) > 0 && <i>{notifications.data?.unread_count}</i>}</button>
               {notificationsOpen && <div className="notification-menu"><header><div><strong>اعلان‌ها</strong><small>{notifications.data?.unread_count || 0} خوانده‌نشده</small></div>{(notifications.data?.unread_count || 0) > 0 && <button onClick={() => readAll.mutate()}>خواندن همه</button>}</header><div className="notification-list">{notifications.isLoading ? <span className="notification-empty">در حال دریافت…</span> : notifications.data?.items.length ? notifications.data.items.map((item) => <button key={item.id} className={item.is_read ? "read" : ""} onClick={() => { if (!item.is_read) readNotification.mutate(item.id); if (item.entity_type === "daily_need") navigate("/kitchen?tab=needs"); if (item.entity_type === "attendance") navigate("/staff?tab=attendance"); if (user.role === "root" && ["staff_point", "payroll_statement"].includes(item.entity_type || "")) navigate("/payroll"); setNotificationsOpen(false); }}><span className="notification-dot" /><div><strong>{item.title}</strong><p>{item.message}</p><small>{dateTime(item.created_at)}</small></div></button>) : <span className="notification-empty">اعلان تازه‌ای ندارید</span>}</div></div>}
@@ -157,12 +163,13 @@ export function AppLayout() {
               {profileOpen && (
                 <div className="profile-menu">
                   <div><strong>@{user.username}</strong><small>{roleLabel[user.role]}</small></div>
-                  <button onClick={logout}><LogOut size={17} /> خروج از حساب</button>
+                  <button onClick={exitAccount} disabled={attendanceMutation.isPending}><LogOut size={17} /> خروج از حساب</button>
                 </div>
               )}
             </div>
           </div>
         </header>
+        {isTemporary && <div className="temporary-session-banner"><strong>حالت ورود موقت فعال است</strong><span>بدون چک‌لیست، امتیاز و ساعت کار مؤثر</span><button disabled={attendanceMutation.isPending} onClick={exitAccount}>ثبت خروج و پایان مراجعه</button></div>}
         <main className="page-content"><Outlet /></main>
       </div>
       <CheckoutChecklistModal open={checkoutOpen} items={attendance.data.checkout_checklist_items} pending={attendanceMutation.isPending} error={attendanceError} onClose={() => { if (!attendanceMutation.isPending) { setCheckoutOpen(false); setAttendanceError(""); } }} onSubmit={(itemIds) => attendanceMutation.mutate({ action: "check-out", itemIds })} />

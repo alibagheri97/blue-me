@@ -85,6 +85,8 @@ export default function PurchasesPage() {
   };
   const invalidate = () => {
     client.invalidateQueries({ queryKey: ["purchases"] });
+    client.invalidateQueries({ queryKey: ["expenses"] });
+    client.invalidateQueries({ queryKey: ["reports"] });
     client.invalidateQueries({ queryKey: ["inventory"] });
     client.invalidateQueries({ queryKey: ["dashboard"] });
     client.invalidateQueries({ queryKey: ["daily-needs"] });

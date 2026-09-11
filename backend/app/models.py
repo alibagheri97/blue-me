@@ -43,6 +43,7 @@ class SectionKey(str, enum.Enum):
     PAYROLL = "payroll"
     INVENTORY = "inventory"
     PURCHASES = "purchases"
+    EXPENSES = "expenses"
     MENU = "menu"
     POS = "pos"
     KITCHEN = "kitchen"
@@ -63,6 +64,7 @@ DEFAULT_SECTION_ACCESS: dict[UserRole, tuple[SectionKey, ...]] = {
         SectionKey.INVENTORY,
         SectionKey.PURCHASES,
         SectionKey.MENU,
+        SectionKey.EXPENSES,
         SectionKey.POS,
         SectionKey.REPORTS,
     ),
@@ -411,6 +413,7 @@ class AttendanceRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    is_temporary: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     staff_member_id: Mapped[int] = mapped_column(
         ForeignKey("staff_members.id"), index=True
     )
@@ -713,6 +716,9 @@ class Order(Base):
     )
     staff_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     is_staff_meal: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_system_waste: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", index=True
+    )
     order_type: Mapped[OrderType] = mapped_column(
         Enum(OrderType, native_enum=False),
         default=OrderType.DINE_IN,

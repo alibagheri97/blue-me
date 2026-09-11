@@ -21,6 +21,8 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [lowStock, setLowStock] = useState(false);
+  const [archived, setArchived] = useState(false);
+  const [deletingItem, setDeletingItem] = useState<InventoryItem | null>(null);
   const [itemForm, setItemForm] = useState<InventoryItem | "new" | null>(null);
   const [formUnit, setFormUnit] = useState("عدد");
   const [purchaseQuantity, setPurchaseQuantity] = useState("1");
@@ -54,17 +56,17 @@ export default function InventoryPage() {
     }
   }, [itemForm]);
 
-  const params = new URLSearchParams({ page_size: "100", active: "true" });
+  const params = new URLSearchParams({ page_size: "100", active: String(!archived) });
   if (search) params.set("search", search);
   if (category) params.set("category_id", category);
   if (lowStock) params.set("low_stock", "true");
-  const items = useQuery({ queryKey: ["inventory", search, category, lowStock], queryFn: () => api<ItemPage>(`/inventory/items?${params}`) });
+  const items = useQuery({ queryKey: ["inventory", search, category, lowStock, archived], queryFn: () => api<ItemPage>(`/inventory/items?${params}`) });
   const categories = useQuery({ queryKey: ["categories"], queryFn: () => api<Category[]>("/inventory/categories") });
   const approvals = useQuery({ queryKey: ["price-requests"], queryFn: () => api<PriceRequest[]>("/inventory/price-requests"), enabled: tab === "approvals" });
-  const invalidate = () => { client.invalidateQueries({ queryKey: ["inventory"] }); client.invalidateQueries({ queryKey: ["price-requests"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); };
+  const invalidate = () => { client.invalidateQueries({ queryKey: ["inventory"] }); client.invalidateQueries({ queryKey: ["price-requests"] }); client.invalidateQueries({ queryKey: ["dashboard"] }); client.invalidateQueries({ queryKey: ["menu"] }); client.invalidateQueries({ queryKey: ["reports"] }); client.invalidateQueries({ queryKey: ["daily-needs"] }); };
   const mutation = useMutation({
     mutationFn: ({ path, method, body }: { path: string; method: string; body?: object | FormData }) => api(path, { method, body }),
-    onSuccess: () => { invalidate(); setItemForm(null); setMovementItem(null); setError(""); },
+    onSuccess: () => { invalidate(); client.invalidateQueries({ queryKey: ["expenses"] }); setItemForm(null); setMovementItem(null); setDeletingItem(null); setDetailItem(null); setError(""); },
     onError: (reason) => setError(reason instanceof ApiError ? reason.message : "انجام عملیات ممکن نشد"),
   });
 
@@ -109,17 +111,17 @@ export default function InventoryPage() {
 
       {tab === "stock" ? <>
         <section className="summary-chips inventory-summary">
-          <div><span className="chip-icon blue"><Boxes /></span><span><strong>{quantity(items.data?.total || 0)}</strong><small>کالای فعال</small></span></div>
+          <div><span className="chip-icon blue"><Boxes /></span><span><strong>{quantity(items.data?.total || 0)}</strong><small>{archived ? "کالای حذف‌شده" : "کالای فعال"}</small></span></div>
           <div><span className="chip-icon green"><CircleDollarSign /></span><span><strong>{money(totalValue)}</strong><small>ارزش موجودی نمایش‌داده‌شده</small></span></div>
           <div><span className="chip-icon amber"><AlertTriangle /></span><span><strong>{quantity(lowCount)}</strong><small>نیازمند تأمین</small></span></div>
         </section>
         <section className="panel catalogue-panel">
-          <div className="toolbar inventory-toolbar"><label className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جست‌وجوی نام یا کد کالا…" /></label><select value={category} onChange={(e) => setCategory(e.target.value)}><option value="">همه دسته‌بندی‌ها</option>{categories.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className={`filter-toggle ${lowStock ? "active" : ""}`} onClick={() => setLowStock(!lowStock)}><SlidersHorizontal size={17} /> فقط کم‌موجودی</button></div>
+          <div className="toolbar inventory-toolbar"><label className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جست‌وجوی نام یا کد کالا…" /></label><select value={category} onChange={(e) => setCategory(e.target.value)}><option value="">همه دسته‌بندی‌ها</option>{categories.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><select aria-label="وضعیت کالاها" value={archived ? "archived" : "active"} onChange={(event) => setArchived(event.target.value === "archived")}><option value="active">کالاهای فعال</option><option value="archived">حذف‌شده‌ها / بازیابی</option></select><button className={`filter-toggle ${lowStock ? "active" : ""}`} onClick={() => setLowStock(!lowStock)}><SlidersHorizontal size={17} /> فقط کم‌موجودی</button></div>
           {items.isLoading ? <div className="center-loader"><Spinner /></div> : items.data?.items.length ? <div className="inventory-grid">{items.data.items.map((item) => { const isLow = Number(item.current_quantity) <= Number(item.reorder_level); return <article className="inventory-card" key={item.id}>
             <button className="item-image" onClick={() => setDetailItem(item)}>{assetUrl(item.image_path) ? <img src={assetUrl(item.image_path)} alt="" /> : <PackageOpen size={30} />}{isLow && <Badge tone="danger">موجودی کم</Badge>}{item.auto_reorder_enabled && <Badge tone="info">خرید خودکار</Badge>}</button>
             <div className="item-card-body"><div className="item-title"><span style={{ background: item.category?.color || "#94a3b8" }} /><div><h3>{item.name}</h3><small>{item.sku} · {item.category?.name || "بدون دسته‌بندی"}</small></div><button className="icon-button" onClick={() => setDetailItem(item)}><MoreHorizontal size={19} /></button></div>
             <div className="item-quantities"><span><small>موجودی</small><strong>{quantity(item.current_quantity)} <i>{item.unit}</i></strong></span><span><small>آخرین خرید</small><strong>{quantity(item.purchase_quantity)} {item.purchase_unit}</strong><em>{money(item.purchase_total_price)}</em></span><span><small>قیمت فروش</small><strong>{quantity(item.selling_quantity)} {item.selling_unit}</strong><em>{money(item.selling_total_price)}</em></span></div>
-            <div className="item-actions"><button onClick={() => { setError(""); setMovementItem(item); }}><ArrowDownToLine size={16} /> موجودی</button><button onClick={() => { setError(""); setItemForm(item); }}><CircleDollarSign size={16} /> قیمت</button><button onClick={() => { setError(""); setItemForm(item); }}>ویرایش <ChevronRight size={15} /></button></div></div>
+            <div className="item-actions">{archived ? <button onClick={() => mutation.mutate({ path: `/inventory/items/${item.id}`, method: "PATCH", body: { is_active: true } })} disabled={mutation.isPending}>بازیابی کالا</button> : <><button onClick={() => { setError(""); setMovementItem(item); }}><ArrowDownToLine size={16} /> موجودی</button><button onClick={() => { setError(""); setItemForm(item); }}><CircleDollarSign size={16} /> قیمت</button><button onClick={() => { setError(""); setItemForm(item); }}>ویرایش <ChevronRight size={15} /></button><button className="danger" aria-label={`حذف ${item.name}`} onClick={() => { setError(""); setDeletingItem(item); }}><Trash2 size={16} /> حذف</button></>}</div></div>
           </article>; })}</div> : <EmptyState icon={<PackageOpen />} title="کالایی پیدا نشد" text="اولین کالا را بسازید یا فیلترها را تغییر دهید." />}
         </section>
       </> : <section className="panel approvals-panel">
@@ -127,6 +129,9 @@ export default function InventoryPage() {
         {approvals.isLoading ? <div className="center-loader"><Spinner /></div> : approvals.data?.length ? <div className="approval-list">{approvals.data.map((request) => <article key={request.id} className="approval-row"><div className="approval-product"><div className="mini-product">{request.item.image_path ? <img src={assetUrl(request.item.image_path)} alt="" /> : <CircleDollarSign />}</div><div><strong>{request.item.name}</strong><small>{request.price_type === "purchase" ? "قیمت خرید" : "قیمت فروش"} · درخواست {request.requested_by.full_name}</small></div></div><div className="price-delta"><span><small>قیمت فعلی هر {request.item.unit}</small>{money(request.old_price)}</span><ArrowDownToLine size={18} /><span><small>پیشنهاد جدید</small><strong>{request.package_total_price !== null ? `${money(request.package_total_price)} برای ${quantity(request.package_quantity)} ${request.package_unit}` : `${money(request.requested_price)} برای هر ${request.item.unit}`}</strong></span></div><div className="approval-reason"><small>دلیل تغییر</small><span>{request.reason}</span><small>{dateTime(request.created_at)}</small></div><Badge tone={request.status === "approved" ? "success" : request.status === "rejected" || request.status === "cancelled" ? "danger" : "warning"}>{statusLabel[request.status]}</Badge>{request.status === "pending" && user?.role === "root" && <div className="approval-actions"><button className="approve" title="تأیید" onClick={() => decide(request.id, "approved")}><Check size={17} /></button><button className="reject" title="رد" onClick={() => decide(request.id, "rejected")}><X size={17} /></button></div>}</article>)}</div> : <EmptyState icon={<Check />} title="درخواست قیمتی وجود ندارد" text="در حال حاضر پیشنهاد قیمتی برای بررسی ثبت نشده است." />}
       </section>}
 
+      <Modal open={!!deletingItem} title="حذف کالا از انبار" onClose={() => !mutation.isPending && setDeletingItem(null)}>
+        {deletingItem && <div className="inventory-delete-confirm"><Trash2 /><h3>{deletingItem.name}</h3><p>کالا از فهرست فعال و ورودی کالا کنار گذاشته می‌شود. سوابق خرید، گردش و سفارش‌ها برای حسابرسی محفوظ می‌ماند.</p><div className="current-stock"><span>موجودی محفوظ در بایگانی</span><strong>{quantity(deletingItem.current_quantity)} {deletingItem.unit}</strong></div><p>محصولات منویی که به این کالا نیاز دارند تا بازیابی یا اصلاح مواد، قابل ثبت نخواهند بود. از «حذف‌شده‌ها / بازیابی» می‌توانید کالا را برگردانید.</p>{error && <div className="form-error">{error}</div>}<div className="form-actions"><Button variant="secondary" disabled={mutation.isPending} onClick={() => setDeletingItem(null)}>انصراف</Button><Button variant="danger" disabled={mutation.isPending} onClick={() => mutation.mutate({ path: `/inventory/items/${deletingItem.id}`, method: "DELETE" })}>{mutation.isPending ? "در حال حذف…" : "تأیید حذف کالا"}</Button></div></div>}
+      </Modal>
       <Modal open={itemForm !== null} title={itemForm === "new" ? "ایجاد کالای انبار" : "ویرایش کالای انبار"} onClose={() => setItemForm(null)} wide>
         <form className="form-grid" onSubmit={saveItem}>
           <label className="field"><span>نام کالا</span><input name="name" required defaultValue={itemForm !== "new" && itemForm ? itemForm.name : ""} /></label>

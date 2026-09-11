@@ -15,7 +15,9 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "../context/AuthContext";
+import { userHasSection } from "../lib/access";
 import { ApiError, api } from "../lib/api";
 import { businessDate, dateTime, money, quantity, statusLabel } from "../lib/format";
 import type { MenuItem, Order } from "../types";
@@ -30,9 +32,12 @@ const paymentMethods = [
   { method: "other", label: "سایر", icon: CircleEllipsis, tone: "amber" },
 ] as const;
 
-export function DayOrdersHistory({ compact = false }: { compact?: boolean }) {
+export function DayOrdersHistory({ compact = false, includeStaffMeals = true, minDay, maxDay }: { compact?: boolean; includeStaffMeals?: boolean; minDay?: string; maxDay?: string }) {
+  const { user } = useAuth();
+  const canEdit = !!user && userHasSection(user, "pos");
   const client = useQueryClient();
-  const [day, setDay] = useState(businessDate());
+  const [day, setDay] = useState(maxDay || businessDate());
+  useEffect(() => { if (maxDay && (day > maxDay || (minDay && day < minDay))) setDay(maxDay); }, [day, minDay, maxDay]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
@@ -40,13 +45,22 @@ export function DayOrdersHistory({ compact = false }: { compact?: boolean }) {
   const [editError, setEditError] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const history = useQuery({
-    queryKey: ["orders-history", day, search],
-    queryFn: () => api<Order[]>(`/orders?day=${day}&search=${encodeURIComponent(search)}&limit=500`),
+    queryKey: ["orders-history", day, search, includeStaffMeals],
+    queryFn: async () => {
+      const all: Order[] = [];
+      let page: Order[];
+      do {
+        page = await api<Order[]>(`/orders?day=${day}&search=${encodeURIComponent(search)}&include_staff_meals=${includeStaffMeals}&limit=500&offset=${all.length}`);
+        all.push(...page);
+      } while (page.length === 500);
+      return all;
+    },
     refetchInterval: day === businessDate() ? 20_000 : false,
   });
   const menu = useQuery({
     queryKey: ["menu", "order-history-editor"],
     queryFn: () => api<MenuItem[]>("/menu-items?active=true"),
+    enabled: canEdit,
   });
   const invalidateOrders = () => {
     client.invalidateQueries({ queryKey: ["orders-history"] });
@@ -78,8 +92,12 @@ export function DayOrdersHistory({ compact = false }: { compact?: boolean }) {
     () => (history.data || []).filter((order) => status === "all" || order.status === status),
     [history.data, status],
   );
-  const completedSales = filteredOrders.filter((order) => !order.is_staff_meal && order.status !== "cancelled");
+  const completedSales = filteredOrders.filter((order) => !order.is_staff_meal && !order.is_system_waste && order.status !== "cancelled");
   const revenue = completedSales.reduce((sum, order) => sum + Number(order.total), 0);
+  const effectiveOrders = filteredOrders.filter((order) => order.status !== "cancelled");
+  const costs = effectiveOrders.reduce((sum, order) => sum + Number(order.takeaway_cost) + order.items.reduce((total, line) => total + Number(line.line_cost), 0), 0);
+  const wasteOrders = effectiveOrders.filter((order) => order.is_system_waste);
+  const wasteCost = wasteOrders.reduce((sum, order) => sum + Number(order.takeaway_cost) + order.items.reduce((total, line) => total + Number(line.line_cost), 0), 0);
   const knownCustomers = new Set(filteredOrders.filter((order) => order.customer_id).map((order) => order.customer_id)).size;
   const paymentBreakdown = paymentMethods.map((entry) => {
     const orders = completedSales.filter((order) => order.payment_method === entry.method);
@@ -95,7 +113,7 @@ export function DayOrdersHistory({ compact = false }: { compact?: boolean }) {
           <div><h2>تاریخچه سفارش‌های روز</h2><p>هر روز کاری از ساعت ۰۵:۰۰ تا ۰۵:۰۰ روز بعد محاسبه می‌شود</p></div>
         </div>
         <div className="day-history-toolbar">
-          <label className="day-history-date"><CalendarDays /><JalaliDatePicker value={day} max={businessDate()} onChange={setDay} ariaLabel="روز سفارش‌ها به تاریخ شمسی" /></label>
+          <label className="day-history-date"><CalendarDays /><JalaliDatePicker value={day} min={minDay} max={maxDay || businessDate()} onChange={setDay} ariaLabel="روز سفارش‌ها به تاریخ شمسی" /></label>
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="شماره سفارش یا مشتری…" /></label>
           <select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="فیلتر وضعیت سفارش">
             <option value="all">همه وضعیت‌ها</option>
@@ -113,10 +131,12 @@ export function DayOrdersHistory({ compact = false }: { compact?: boolean }) {
         <div><span className="chip-icon green"><CircleDollarSign /></span><span><small>فروش مؤثر روز</small><strong>{money(revenue)}</strong></span></div>
         <div><span className="chip-icon violet"><Users /></span><span><small>مشتری شناخته‌شده</small><strong>{quantity(knownCustomers)}</strong></span></div>
         <div><span className="chip-icon amber"><ContactRound /></span><span><small>غذای پرسنلی</small><strong>{quantity(filteredOrders.filter((order) => order.is_staff_meal).length)}</strong></span></div>
+        <div><span className="chip-icon amber"><Trash2 /></span><span><small>هزینه اتلاف · {quantity(wasteOrders.length)} ثبت</small><strong>{money(wasteCost)}</strong></span></div>
+        <div><span className="chip-icon green"><CircleDollarSign /></span><span><small>سود پس از هزینه‌ها</small><strong>{money(revenue - costs)}</strong></span></div>
       </div>
 
       <div className="day-payment-breakdown">
-        <header><span><CircleDollarSign /></span><div><strong>تفکیک دریافتی این روز</strong><small>مبالغ مؤثر مطابق فیلترهای بالا؛ بدون غذای پرسنلی و سفارش لغوشده</small></div></header>
+        <header><span><CircleDollarSign /></span><div><strong>تفکیک دریافتی این روز</strong><small>مبالغ مؤثر مطابق فیلترهای بالا؛ بدون غذای پرسنلی، اتلاف و سفارش لغوشده</small></div></header>
         <div>
           {paymentBreakdown.map((entry) => {
             const Icon = entry.icon;
@@ -133,17 +153,17 @@ export function DayOrdersHistory({ compact = false }: { compact?: boolean }) {
               {filteredOrders.map((order) => (
                 <tr key={order.id}>
                   <td data-label="سفارش"><strong>{order.order_number}</strong><small>#{quantity(order.id)}</small>{order.order_type === "takeaway" && <Badge tone="warning"><PackageOpen size={13} /> بیرون‌بر · {quantity(order.takeaway_package_count)} بسته</Badge>}</td>
-                  <td data-label="مشتری / حساب"><strong>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</strong>{order.is_staff_meal && <Badge tone="violet">پرسنلی</Badge>}</td>
+                  <td data-label="مشتری / حساب"><strong>{order.customer_name === "Guest" ? "مهمان" : order.customer_name}</strong>{order.is_staff_meal && <Badge tone="violet">پرسنلی</Badge>}{order.is_system_waste && <Badge tone="danger">اتلاف سیستم</Badge>}</td>
                   <td data-label="اقلام"><span className="day-history-items">{order.items.map((item) => `${quantity(item.quantity)}× ${item.name}`).join(" · ")}</span></td>
                   <td data-label="زمان"><span>{dateTime(order.created_at)}</span></td>
-                  <td data-label="مبلغ"><strong>{order.is_staff_meal ? "بدون دریافت" : money(order.total)}</strong></td>
-                  <td data-label="روش دریافت"><Badge tone={order.is_staff_meal ? "violet" : order.payment_method === "cash" ? "success" : order.payment_method === "online" ? "info" : "neutral"}>{order.is_staff_meal ? "داخلی" : statusLabel[order.payment_method]}</Badge></td>
+                  <td data-label="مبلغ"><strong>{order.is_staff_meal || order.is_system_waste ? "بدون دریافت" : money(order.total)}</strong></td>
+                  <td data-label="روش دریافت"><Badge tone={order.is_staff_meal ? "violet" : order.payment_method === "cash" ? "success" : order.payment_method === "online" ? "info" : "neutral"}>{order.is_system_waste ? "اتلاف" : order.is_staff_meal ? "داخلی" : statusLabel[order.payment_method]}</Badge></td>
                   <td data-label="وضعیت"><Badge tone={order.status === "cancelled" ? "danger" : order.status === "completed" ? "success" : "info"}>{statusLabel[order.status]}</Badge></td>
                   <td data-label="عملیات">
-                    <div className="day-history-actions">
+                    {canEdit && <div className="day-history-actions">
                       <button type="button" disabled={order.status === "cancelled"} onClick={() => { setEditError(""); setEditingOrder(order); }} title={order.status === "cancelled" ? "سفارش لغوشده قابل ویرایش نیست" : "ویرایش سفارش"}><Pencil /></button>
                       <button type="button" className="danger" onClick={() => { setDeleteError(""); setDeletingOrder(order); }} title="حذف سفارش"><Trash2 /></button>
-                    </div>
+                    </div>}
                   </td>
                 </tr>
               ))}

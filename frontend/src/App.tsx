@@ -14,6 +14,7 @@ const StaffPage = lazy(() => import("./pages/StaffPage"));
 const PayrollPage = lazy(() => import("./pages/PayrollPage"));
 const InventoryPage = lazy(() => import("./pages/InventoryPage"));
 const PurchasesPage = lazy(() => import("./pages/PurchasesPage"));
+const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
 const MenuPage = lazy(() => import("./pages/MenuPage"));
 const PosPage = lazy(() => import("./pages/PosPage"));
 const KitchenPage = lazy(() => import("./pages/KitchenPage"));
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="/payroll" element={<SectionRoute section="payroll"><PayrollPage /></SectionRoute>} />
         <Route path="/inventory" element={<SectionRoute section="inventory"><InventoryPage /></SectionRoute>} />
         <Route path="/purchases" element={<SectionRoute section="purchases"><PurchasesPage /></SectionRoute>} />
+        <Route path="/expenses" element={<SectionRoute section="expenses"><ExpensesPage /></SectionRoute>} />
         <Route path="/menu" element={<SectionRoute section="menu"><MenuPage /></SectionRoute>} />
         <Route path="/pos" element={<SectionRoute section="pos"><PosPage /></SectionRoute>} />
         <Route path="/kitchen" element={<SectionRoute section="kitchen"><KitchenPage /></SectionRoute>} />

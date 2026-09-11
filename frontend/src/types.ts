@@ -11,6 +11,7 @@ export type SectionKey =
   | "payroll"
   | "inventory"
   | "purchases"
+  | "expenses"
   | "menu"
   | "pos"
   | "kitchen"
@@ -55,6 +56,7 @@ export interface AttendanceStaff {
 
 export interface AttendanceRecord {
   id: number;
+  is_temporary: boolean;
   staff_member_id: number;
   checked_in_by_id: number;
   checked_out_by_id: number | null;
@@ -420,6 +422,7 @@ export interface Order {
   staff_member_id: number | null;
   staff_name: string | null;
   is_staff_meal: boolean;
+  is_system_waste: boolean;
   order_type: OrderType;
   takeaway_package_count: number;
   takeaway_cost: string;
@@ -450,6 +453,7 @@ export interface KitchenOrder {
   staff_member_id: number | null;
   staff_name: string | null;
   is_staff_meal: boolean;
+  is_system_waste: boolean;
   order_type: OrderType;
   takeaway_package_count: number;
   notes: string | null;

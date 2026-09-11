@@ -79,6 +79,8 @@ def serialize_menu_item(item: MenuItem) -> dict:
         per_sale = Decimal(item.stock_quantity_per_sale)
         cost = Decimal(item.inventory_item.average_cost) * per_sale
         max_available = int(Decimal(item.inventory_item.current_quantity) / per_sale)
+        if not item.inventory_item.is_active:
+            max_available = 0
     elif item.recipe is not None and item.recipe.ingredients:
         configured = True
         yield_quantity = Decimal(item.recipe.yield_quantity)
@@ -99,6 +101,8 @@ def serialize_menu_item(item: MenuItem) -> dict:
             )
             for line in item.recipe.ingredients
         )
+        if any(not line.inventory_item.is_active for line in item.recipe.ingredients):
+            max_available = 0
     gross_profit = Decimal(item.selling_price) - cost
     margin = (
         gross_profit / Decimal(item.selling_price) * 100
@@ -575,11 +579,12 @@ def create_order(
         menu_required_stock, takeaway_required_stock
     )
     is_staff_meal = staff_member is not None
-    if not is_staff_meal and payload.discount > subtotal:
+    is_internal = is_staff_meal or payload.is_system_waste
+    if not is_internal and payload.discount > subtotal:
         raise HTTPException(
             status_code=422, detail="Discount cannot be greater than subtotal"
         )
-    effective_discount = subtotal if is_staff_meal else payload.discount
+    effective_discount = subtotal if is_internal else payload.discount
 
     locked_items = {
         item.id: item
@@ -593,7 +598,7 @@ def create_order(
     shortages = []
     for item_id, needed in required_stock.items():
         stock_item = locked_items.get(item_id)
-        if stock_item is None:
+        if stock_item is None or not stock_item.is_active:
             shortages.append(f"کالای انبار #{item_id}: در دسترس نیست")
         elif Decimal(stock_item.current_quantity) < needed:
             shortages.append(
@@ -610,12 +615,14 @@ def create_order(
         order_number=f"BM-{business_today():%y%m%d}-{uuid4().hex[:6].upper()}",
         status=(
             OrderStatus.CONFIRMED
-            if kitchen_workflow_enabled
+            if kitchen_workflow_enabled and not payload.is_system_waste
             else OrderStatus.COMPLETED
         ),
         customer_id=customer.id if customer else None,
         customer_name=(
-            staff_member.name
+            "اتلاف سیستم"
+            if payload.is_system_waste
+            else staff_member.name
             if staff_member is not None
             else customer.name
             if customer is not None
@@ -624,12 +631,13 @@ def create_order(
         staff_member_id=staff_member.id if staff_member else None,
         staff_name=staff_member.name if staff_member else None,
         is_staff_meal=is_staff_meal,
+        is_system_waste=payload.is_system_waste,
         order_type=payload.order_type,
         takeaway_package_count=takeaway_package_count,
         subtotal=subtotal,
         discount=effective_discount,
-        total=Decimal("0") if is_staff_meal else subtotal - effective_discount,
-        payment_method=PaymentMethod.OTHER if is_staff_meal else payload.payment_method,
+        total=Decimal("0") if is_internal else subtotal - effective_discount,
+        payment_method=PaymentMethod.OTHER if is_internal else payload.payment_method,
         notes=payload.notes,
         created_by_id=actor.id,
     )
@@ -660,7 +668,9 @@ def create_order(
                 menu_amount,
                 "order",
                 (
-                    f"Staff meal for {staff_member.name} in order {order.order_number}"
+                    f"اتلاف سیستم {order.order_number}: {payload.notes}"
+                    if payload.is_system_waste
+                    else f"Staff meal for {staff_member.name} in order {order.order_number}"
                     if staff_member is not None
                     else f"Ingredients used by order {order.order_number}"
                 ),
@@ -679,7 +689,9 @@ def create_order(
                 StockMovement(
                     item_id=item_id,
                     movement_type=(
-                        MovementType.CONSUME
+                        MovementType.WASTE
+                        if payload.is_system_waste
+                        else MovementType.CONSUME
                         if is_staff_meal
                         else MovementType.SALE
                     ),
@@ -715,7 +727,9 @@ def create_order(
         entity_type="order",
         entity_id=order.id,
         summary=(
-            f"Placed staff meal {order.order_number} for {order.staff_name}"
+            f"ثبت اتلاف سیستم {order.order_number}: {order.notes}"
+            if order.is_system_waste
+            else f"Placed staff meal {order.order_number} for {order.staff_name}"
             if is_staff_meal
             else f"Placed order {order.order_number} for {order.customer_name}"
         ),
@@ -729,6 +743,7 @@ def create_order(
             "items": len(payload.items),
             "payment": order.payment_method.value,
             "is_staff_meal": is_staff_meal,
+            "is_system_waste": order.is_system_waste,
             "staff_member_id": order.staff_member_id,
             "order_type": order.order_type.value,
             "takeaway_package_count": order.takeaway_package_count,
@@ -744,7 +759,7 @@ def create_order(
                 }
                 for supply in takeaway_supplies
             ],
-            "excluded_from_sales_reports": is_staff_meal,
+            "excluded_from_sales_reports": is_internal,
             "kitchen_workflow_enabled": kitchen_workflow_enabled,
             "initial_status": order.status.value,
         },
@@ -758,12 +773,16 @@ def create_order(
 def list_orders(
     order_status: OrderStatus | None = Query(default=None, alias="status"),
     day: date | None = None,
+    include_staff_meals: bool = True,
+    offset: int = Query(default=0, ge=0),
     search: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=100, ge=1, le=500),
-    _: User = Depends(accounting_roles),
+    _: User = Depends(require_sections(SectionKey.POS, SectionKey.REPORTS)),
     db: Session = Depends(get_db),
 ) -> list[Order]:
     query = order_query()
+    if not include_staff_meals:
+        query = query.where(Order.is_staff_meal.is_(False))
     if order_status:
         query = query.where(Order.status == order_status)
     if day:
@@ -775,7 +794,7 @@ def list_orders(
             or_(Order.order_number.ilike(term), Order.customer_name.ilike(term))
         )
     return list(
-        db.scalars(query.order_by(Order.created_at.desc()).limit(limit)).unique()
+        db.scalars(query.order_by(Order.created_at.desc(), Order.id.desc()).offset(offset).limit(limit)).unique()
     )
 
 
@@ -798,6 +817,12 @@ def update_order(
     if order.status == OrderStatus.CANCELLED:
         raise HTTPException(status_code=409, detail="A cancelled order cannot be edited")
     customer_fields = {"customer_id", "customer"}.intersection(payload.model_fields_set)
+    if order.is_system_waste:
+        if customer_fields:
+            raise HTTPException(status_code=409, detail="System waste cannot be assigned to a customer or staff member")
+        if len((payload.notes or "").strip()) < 3:
+            raise HTTPException(status_code=422, detail="A reason is required for system waste")
+    is_internal = order.is_staff_meal or order.is_system_waste
     if order.is_staff_meal and customer_fields:
         raise HTTPException(
             status_code=409,
@@ -856,11 +881,11 @@ def update_order(
     required_stock = merge_stock_requirements(
         menu_required_stock, takeaway_required_stock
     )
-    if not order.is_staff_meal and payload.discount > subtotal:
+    if not is_internal and payload.discount > subtotal:
         raise HTTPException(
             status_code=422, detail="Discount cannot be greater than subtotal"
         )
-    effective_discount = subtotal if order.is_staff_meal else payload.discount
+    effective_discount = subtotal if is_internal else payload.discount
     previous_required_stock = current_order_stock_requirements(db, order.id)
     stock_ids = sorted(set(previous_required_stock) | set(required_stock))
     locked_items = {
@@ -880,7 +905,7 @@ def update_order(
     shortages: list[str] = []
     for item_id, delta in stock_deltas.items():
         stock_item = locked_items.get(item_id)
-        if stock_item is None:
+        if stock_item is None or (delta > 0 and not stock_item.is_active):
             shortages.append(f"کالای انبار #{item_id}: در دسترس نیست")
         elif delta > 0 and Decimal(stock_item.current_quantity) < delta:
             shortages.append(
@@ -973,10 +998,10 @@ def update_order(
     order.subtotal = subtotal
     order.discount = effective_discount
     order.total = (
-        Decimal("0") if order.is_staff_meal else subtotal - effective_discount
+        Decimal("0") if is_internal else subtotal - effective_discount
     )
     order.payment_method = (
-        PaymentMethod.OTHER if order.is_staff_meal else payload.payment_method
+        PaymentMethod.OTHER if is_internal else payload.payment_method
     )
     order.order_type = requested_order_type
     order.takeaway_package_count = takeaway_package_count
@@ -998,6 +1023,7 @@ def update_order(
         details={
             "before": {**previous_totals, "items": previous_items},
             "after": {
+                "is_system_waste": order.is_system_waste,
                 "subtotal": str(order.subtotal),
                 "discount": str(order.discount),
                 "total": str(order.total),
@@ -1116,6 +1142,7 @@ def delete_order(
             "customer_id": order.customer_id,
             "customer_name": order.customer_name,
             "is_staff_meal": order.is_staff_meal,
+            "is_system_waste": order.is_system_waste,
             "order_type": order.order_type.value,
             "takeaway_package_count": order.takeaway_package_count,
             "takeaway_cost": str(order.takeaway_cost),
@@ -1232,10 +1259,12 @@ def receipt_data(
         "order": OrderRead.model_validate(order),
         "quote": quote_for_order(order.order_number),
         "customer_copy": {
-            "title": "برگه غذای پرسنلی" if order.is_staff_meal else "رسید مشتری",
-            "show_prices": not order.is_staff_meal,
+            "title": "برگه اتلاف سیستم" if order.is_system_waste else "برگه غذای پرسنلی" if order.is_staff_meal else "رسید مشتری",
+            "show_prices": not (order.is_staff_meal or order.is_system_waste),
             "footer": (
-                "مصرف داخلی؛ خارج از فروش و سود"
+                "اتلاف ثبت‌شده؛ بدون دریافت وجه، هزینه کسرشده از سود"
+                if order.is_system_waste
+                else "مصرف داخلی؛ بدون دریافت وجه"
                 if order.is_staff_meal
                 else "از خرید شما سپاسگزاریم"
             ),

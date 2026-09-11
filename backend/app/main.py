@@ -12,6 +12,7 @@ from app.routers import (
     audit_logs,
     auth,
     config,
+    expenses,
     inventory,
     kitchen,
     notifications,
@@ -51,6 +52,7 @@ app.include_router(attendance.router)
 app.include_router(users.router)
 app.include_router(inventory.router)
 app.include_router(purchases.router)
+app.include_router(expenses.router)
 app.include_router(orders.router)
 app.include_router(staff.router)
 app.include_router(payroll.router)

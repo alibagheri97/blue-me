@@ -53,6 +53,7 @@ export function OrderEditModal({
   pending: boolean;
   error: string;
 }) {
+  const isInternal = order.is_staff_meal || order.is_system_waste;
   const [search, setSearch] = useState("");
   const [lines, setLines] = useState<Record<number, EditableOrderLine>>(() =>
     Object.fromEntries(
@@ -71,7 +72,7 @@ export function OrderEditModal({
       }),
     ),
   );
-  const [discount, setDiscount] = useState(String(order.is_staff_meal ? 0 : order.discount));
+  const [discount, setDiscount] = useState(String(isInternal ? 0 : order.discount));
   const [payment, setPayment] = useState(order.payment_method);
   const [notes, setNotes] = useState(order.notes || "");
   const [orderType, setOrderType] = useState<OrderType>(order.order_type);
@@ -91,12 +92,12 @@ export function OrderEditModal({
   const customers = useQuery({
     queryKey: ["customers", "order-editor", customerSearch],
     queryFn: () => api<Customer[]>(`/customers?search=${encodeURIComponent(customerSearch)}`),
-    enabled: !order.is_staff_meal && customerMode === "existing" && !selectedCustomer,
+    enabled: !isInternal && customerMode === "existing" && !selectedCustomer,
   });
 
   const orderLines = Object.values(lines);
   const subtotal = orderLines.reduce((sum, line) => sum + line.unit_price * line.quantity, 0);
-  const total = order.is_staff_meal ? 0 : Math.max(0, subtotal - Number(discount || 0));
+  const total = isInternal ? 0 : Math.max(0, subtotal - Number(discount || 0));
   const candidates = menu
     .filter((item) => !search.trim() || item.name.toLowerCase().includes(search.trim().toLowerCase()))
     .slice(0, 60);
@@ -124,19 +125,20 @@ export function OrderEditModal({
       return next;
     });
   const submit = () => {
+    if (order.is_system_waste && notes.trim().length < 3) { setCustomerError("دلیل اتلاف را وارد کنید"); return; }
     const body: Record<string, unknown> = {
       items: orderLines.map((line) => ({
         menu_item_id: line.menu_item_id,
         quantity: line.quantity,
         notes: line.notes || null,
       })),
-      discount: order.is_staff_meal ? 0 : Number(discount || 0),
-      payment_method: order.is_staff_meal ? "other" : payment,
+      discount: isInternal ? 0 : Number(discount || 0),
+      payment_method: isInternal ? "other" : payment,
       notes: notes || null,
       order_type: orderType,
     };
     if (orderType === "takeaway") body.takeaway_package_count = takeawayPackageCount;
-    if (!order.is_staff_meal) {
+    if (!isInternal) {
       if (customerMode === "guest") body.customer_id = null;
       if (customerMode === "existing") {
         if (!selectedCustomer) {
@@ -180,7 +182,7 @@ export function OrderEditModal({
         {orderType === "takeaway" && <div className="edit-takeaway-package-count"><span><strong>تعداد بسته بیرون‌بر</strong><small>مصرف تعریف‌شده برای هر بسته در این تعداد ضرب می‌شود.</small></span><div><button type="button" onClick={() => setTakeawayPackageCount((count) => Math.max(1, count - 1))}><Minus /></button><b>{quantity(takeawayPackageCount)}</b><button type="button" onClick={() => setTakeawayPackageCount((count) => Math.min(999, count + 1))}><Plus /></button></div></div>}
       </section>
 
-      {!order.is_staff_meal && (
+      {!isInternal && (
         <section className="edit-order-customer">
           <header>
             <span className="edit-customer-icon"><ContactRound /></span>
@@ -279,21 +281,22 @@ export function OrderEditModal({
             )) : <EmptyState icon={<ShoppingBag />} title="سفارش بدون قلم است" text="حداقل یک محصول از منو اضافه کنید." />}
           </div>
           <div className="edit-order-options">
-            {!order.is_staff_meal && <>
+            {!isInternal && <>
               <label><span>تخفیف</span><input type="number" min="0" max={subtotal} value={discount} onChange={(event) => setDiscount(event.target.value)} /></label>
               <label><span>روش پرداخت</span><select value={payment} onChange={(event) => setPayment(event.target.value as Order["payment_method"])}><option value="card">کارت خوان</option><option value="cash">نقدی</option><option value="online">آنلاین</option><option value="other">سایر</option></select></label>
             </>}
-            <label className="wide"><span>توضیح کلی سفارش</span><input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="اختیاری" /></label>
+            <label className="wide"><span>{order.is_system_waste ? "دلیل اتلاف (الزامی)" : "توضیح کلی سفارش"}</span><input maxLength={500} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="اختیاری" /></label>
           </div>
-          <div className={`edit-order-total ${order.is_staff_meal ? "staff-order-total" : ""}`}>
-            <span><small>{order.is_staff_meal ? "ارزش منو" : "جمع اقلام"}</small><strong>{money(subtotal)}</strong></span>
-            {!order.is_staff_meal && <span><small>مبلغ نهایی</small><strong>{money(total)}</strong></span>}
-            {order.is_staff_meal && <span><small>قابل پرداخت</small><strong>بدون دریافت وجه</strong></span>}
+          <div className={`edit-order-total ${isInternal ? "staff-order-total" : ""}`}>
+            <span><small>{isInternal ? "ارزش منو" : "جمع اقلام"}</small><strong>{money(subtotal)}</strong></span>
+            {!isInternal && <span><small>مبلغ نهایی</small><strong>{money(total)}</strong></span>}
+            {isInternal && <span><small>قابل پرداخت</small><strong>بدون دریافت وجه</strong></span>}
           </div>
+          {customerError && isInternal && <div className="form-error">{customerError}</div>}
           {error && <div className="form-error">{error}</div>}
           <div className="edit-order-actions">
             <Button type="button" variant="secondary" onClick={close}>انصراف</Button>
-            <Button type="button" disabled={pending || !orderLines.length || (!order.is_staff_meal && Number(discount || 0) > subtotal)} onClick={submit}><Save size={17} /> {pending ? "در حال ذخیره…" : "ذخیره و محاسبه مجدد"}</Button>
+            <Button type="button" disabled={pending || !orderLines.length || (!isInternal && Number(discount || 0) > subtotal)} onClick={submit}><Save size={17} /> {pending ? "در حال ذخیره…" : "ذخیره و محاسبه مجدد"}</Button>
           </div>
         </aside>
       </div>

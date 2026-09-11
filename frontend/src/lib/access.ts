@@ -11,6 +11,7 @@ export const sectionDefinitions: Array<{
   { key: "payroll", path: "/payroll", label: "حقوق و امتیاز", description: "قرارداد، امتیاز عملکرد و محاسبه پرداخت" },
   { key: "inventory", path: "/inventory", label: "مدیریت انبار", description: "کالاها، موجودی، قیمت‌ها و گردش انبار" },
   { key: "purchases", path: "/purchases", label: "ورودی کالا", description: "ثبت خرید و ورود اقلام به موجودی" },
+  { key: "expenses", path: "/expenses", label: "هزینه‌ها", description: "رسیدهای خرید، تحلیل هزینه و روند قیمت مواد اولیه" },
   { key: "menu", path: "/menu", label: "مدیریت منو", description: "محصولات فروش، دسته‌ها و مواد مصرفی" },
   { key: "pos", path: "/pos", label: "سفارش و صندوق", description: "ثبت، ویرایش، حذف و چاپ سفارش‌ها" },
   { key: "kitchen", path: "/kitchen", label: "آشپزخانه", description: "صف سفارش، دستور پخت و نیازهای روزانه" },
@@ -23,7 +24,7 @@ export const allSectionKeys = sectionDefinitions.map((section) => section.key);
 const roleDefaults: Record<Role, SectionKey[]> = {
   root: allSectionKeys,
   storage_manager: ["inventory", "purchases"],
-  accounting_manager: ["dashboard", "staff", "inventory", "purchases", "menu", "pos", "reports"],
+  accounting_manager: ["dashboard", "staff", "inventory", "purchases", "expenses", "menu", "pos", "reports"],
   sales_manager: ["menu"],
   kitchen_manager: ["kitchen"],
 };
